@@ -745,6 +745,70 @@ discover_heavyweights() {
 }
 
 # ---------------------------------------------------------------------------------
+# planner
+# ---------------------------------------------------------------------------------
+TARGET_BYTES="" TARGET_PATH="$HOME" TARGET_MOUNT=""
+SELECTED=() SKIPPED_LOSSY=()
+
+# --free 12G | --free 12G:/mnt/data | --auto (reach <85% on the worst mount)
+resolve_target() {
+  local pct_goal=85
+  if [[ -n "${FREE_ARG:-}" ]]; then
+    local sz="${FREE_ARG%%:*}" pth="${FREE_ARG#*:}"
+    [[ "$pth" == "$FREE_ARG" ]] && pth="$HOME"
+    TARGET_PATH="$pth"
+    TARGET_BYTES=$(parse_size "$sz") || {
+      printf '%sbad --free size: %s%s (use e.g. 12G)\n' "$C_RED" "$sz" "$C_RESET" >&2
+      exit 2
+    }
+  elif [[ ${AUTO_MODE:-0} -eq 1 ]]; then
+    TARGET_PATH="$HOME"
+    local total_kb
+    total_kb=$(df -P "$TARGET_PATH" 2>/dev/null | awk 'NR==2{print $2}')
+    TARGET_BYTES=$(( total_kb * 1024 * (100 - pct_goal) / 100 ))
+  else
+    TARGET_BYTES=""
+  fi
+  TARGET_MOUNT=$(mount_of "$TARGET_PATH")
+}
+
+target_met() {
+  [[ -z "$TARGET_BYTES" ]] && return 1
+  (( $(avail_bytes "$TARGET_PATH") >= TARGET_BYTES ))
+}
+
+# Fill SELECTED in execution order: tier ascending, then bytes descending so the
+# cheapest big wins land first within a tier.
+select_units() {
+  SELECTED=() SKIPPED_LOSSY=()
+  local id forced
+  local -a rows=()
+
+  for id in "${U_IDS[@]}"; do
+    forced=0
+    if [[ -n "${U_FLAG[$id]}" && " ${FORCED_FLAGS:-} " == *" ${U_FLAG[$id]} "* ]]; then forced=1; fi
+
+    # the ceiling is absolute — a legacy flag cannot cross it, only --allow-lossy can
+    if [[ "${U_REV[$id]}" != 1 ]] && [[ ${ALLOW_LOSSY:-0} -ne 1 ]]; then
+      SKIPPED_LOSSY+=("$id"); continue
+    fi
+    (( ${U_TIER[$id]} > ${TIER_CAP:-5} )) && (( forced == 0 )) && continue
+    [[ -n "${U_LOCKED[$id]}" ]] && continue
+    if [[ -n "$TARGET_MOUNT" && -n "${U_MOUNT[$id]}" && "${U_MOUNT[$id]}" != "$TARGET_MOUNT" ]]; then
+      (( forced == 0 )) && continue
+    fi
+    rows+=("$(printf '%d %012d %s' "${U_TIER[$id]}" "${U_BYTES[$id]}" "$id")")
+  done
+
+  (( ${#rows[@]} )) || return 0
+  readarray -t rows < <(printf '%s\n' "${rows[@]}" | sort -k1,1n -k2,2nr)
+  for id in "${rows[@]}"; do
+    [[ -z "$id" ]] && continue
+    SELECTED+=("${id##* }")
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -1087,6 +1151,81 @@ sttest_heavyweights() {
   st_assert "classify_dir names a class" \
     "$(classify_dir "$root/BigData" | grep -cE '^(cache|data|mixed)$')" "1"
   HEAVY_LIST=(); HEAVY_ROOTS=("$HOME")
+}
+
+sttest_planner() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  register_unit t1a 1 1 "t1a" paths "$root/.cache/npm/blob"
+  register_unit t3a 3 1 "t3a" paths "$root/.config/FakeApp/Cache"
+  register_unit t4a 4 0 "t4a" paths "$root/.config/FakeApp/Local Storage"
+  register_unit t5a 5 0 "t5a" paths "$root/.config/FakeApp/IndexedDB"
+  local id; for id in "${U_IDS[@]}"; do probe_unit "$id"; done
+
+  TARGET_MOUNT=$(mount_of "$root")
+  for id in "${U_IDS[@]}"; do U_MOUNT[$id]="$TARGET_MOUNT"; done
+
+  # ceiling holds by default
+  ALLOW_LOSSY=0; TIER_CAP=5; FORCED_FLAGS=""
+  select_units
+  st_assert "tier 1 selected"      "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t1a$')" "1"
+  st_assert "tier 3 selected"      "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t3a$')" "1"
+  st_assert "TIER 4 WITHHELD"      "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t4a$')" "0"
+  st_assert "TIER 5 WITHHELD"      "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t5a$')" "0"
+  st_assert "withheld are reported" "$(printf '%s\n' "${SKIPPED_LOSSY[@]}" | grep -c '^t4a$')" "1"
+
+  # ordering: lower tier first
+  st_assert "tier order respected" "${SELECTED[0]}" "t1a"
+
+  # --allow-lossy opens the gate
+  ALLOW_LOSSY=1
+  select_units
+  st_assert "allow-lossy admits tier 4" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t4a$')" "1"
+  st_assert "allow-lossy admits tier 5" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t5a$')" "1"
+
+  # --tier caps below the ceiling
+  ALLOW_LOSSY=0; TIER_CAP=1
+  select_units
+  st_assert "tier cap admits t1a"  "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t1a$')" "1"
+  st_assert "tier cap excludes t3a" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t3a$')" "0"
+  TIER_CAP=5
+
+  # units on another mount are excluded
+  U_MOUNT[t3a]="/some/other/mount"
+  select_units
+  st_assert "off-target mount excluded" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t3a$')" "0"
+  U_MOUNT[t3a]="$TARGET_MOUNT"
+
+  # locked units are excluded
+  U_LOCKED[t3a]="fakeapp:999"
+  select_units
+  st_assert "locked unit excluded" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t3a$')" "0"
+  U_LOCKED[t3a]=""
+
+  # a legacy flag force-includes past the tier cap, but NOT past the ceiling
+  TIER_CAP=1; U_FLAG[t3a]="--jetbrains"; FORCED_FLAGS="--jetbrains"
+  select_units
+  st_assert "legacy flag forces inclusion" "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t3a$')" "1"
+  U_FLAG[t4a]="--claude-history"; FORCED_FLAGS="--jetbrains --claude-history"
+  select_units
+  st_assert "legacy flag alone cannot cross ceiling" \
+    "$(printf '%s\n' "${SELECTED[@]}" | grep -c '^t4a$')" "0"
+  TIER_CAP=5; FORCED_FLAGS=""
+
+  # an empty registry must not blow up on set -u
+  st_reset_registry
+  select_units
+  st_assert "empty registry selects nothing" "${#SELECTED[@]}" "0"
+
+  # target parsing
+  TARGET_BYTES=""; FREE_ARG="12G"; TARGET_PATH="$HOME"
+  resolve_target
+  st_assert "resolve_target parses --free" "$TARGET_BYTES" "12884901888"
+  FREE_ARG="12G:$root"
+  resolve_target
+  st_assert "resolve_target honours :path" "$TARGET_PATH" "$root"
+  FREE_ARG=""; TARGET_BYTES=""; TARGET_PATH="$HOME"
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
