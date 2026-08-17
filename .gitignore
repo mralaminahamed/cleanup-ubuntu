@@ -1,0 +1,3 @@
+# local session/plugin state — not part of the tool
+.remember/
+.claude/
