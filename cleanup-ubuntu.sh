@@ -688,6 +688,63 @@ discover_app_caches() {
 }
 
 # ---------------------------------------------------------------------------------
+# discovery: report-only heavyweights
+#
+# Anything big that no unit claims. Never deleted — this exists so the user can
+# see where the space actually went (e.g. ~/Downloads at 5.5G) and decide for
+# themselves.
+# ---------------------------------------------------------------------------------
+HEAVY_LIST=()
+HEAVY_ROOTS=("$HOME")
+HEAVY_MIN_BYTES=$(( 200 * 1024 * 1024 ))
+
+# Guess what a directory holds, so the report can hint without deciding.
+classify_dir() {
+  local d="$1" n
+  n=$(basename "$d")
+  case "$n" in
+    .cache|cache|Cache|*Cache) echo cache; return ;;
+    Downloads|Documents|Pictures|Videos|Music) echo data; return ;;
+  esac
+  if find "$d" -maxdepth 2 -type d \( -name Cache -o -name 'Code Cache' -o -name GPUCache \) \
+       -print -quit 2>/dev/null | grep -q .; then
+    echo mixed
+  else
+    echo data
+  fi
+}
+
+# True if any registered unit already covers this path.
+claimed_by_unit() {
+  local d="$1" id p
+  local -a plist=()
+  for id in "${U_IDS[@]}"; do
+    [[ "${U_KIND[$id]}" == cmd ]] && continue
+    readarray -t plist < <(unit_paths "$id")
+    for p in "${plist[@]}"; do
+      [[ -z "$p" ]] && continue
+      [[ "$d" == "$p" || "$d" == "$p"/* || "$p" == "$d"/* ]] && return 0
+    done
+  done
+  return 1
+}
+
+discover_heavyweights() {
+  local r d b cls
+  for r in "${HEAVY_ROOTS[@]}"; do
+    [[ -d "$r" ]] || continue
+    while IFS= read -r d; do
+      [[ -z "$d" ]] && continue
+      b=$(path_bytes "$d")
+      (( b >= HEAVY_MIN_BYTES )) || continue
+      claimed_by_unit "$d" && continue
+      cls=$(classify_dir "$d")
+      HEAVY_LIST+=("$b"$'\t'"$d"$'\t'"$cls")
+    done < <(find "$r" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -992,6 +1049,44 @@ sttest_discovery_caches() {
     st_assert "discovered unit $id is tier 2" "${U_TIER[$id]}" "2"
   done
   DISCOVER_ROOTS=("$HOME/.config" "$HOME/.local/share" "$HOME/.cache")
+}
+
+sttest_heavyweights() {
+  local root; root=$(st_fixture)
+  mkdir -p "$root/BigData"
+  truncate -s 300M "$root/BigData/blob.bin"
+  mkdir -p "$root/SmallThing"
+  truncate -s 1M   "$root/SmallThing/blob.bin"
+
+  st_reset_registry
+  HEAVY_LIST=()
+  HEAVY_ROOTS=("$root")
+  HEAVY_MIN_BYTES=$(( 200 * 1024 * 1024 ))
+  discover_heavyweights
+
+  local has_big=0 has_small=0 row
+  for row in "${HEAVY_LIST[@]}"; do
+    [[ "$row" == *"BigData"* ]]    && has_big=1
+    [[ "$row" == *"SmallThing"* ]] && has_small=1
+  done
+  st_assert "heavyweight over threshold listed"  "$has_big"   "1"
+  st_assert "dir under threshold not listed"     "$has_small" "0"
+
+  # report-only: the bytes must still be on disk afterwards
+  st_assert "heavyweight NOT deleted" \
+    "$([[ -e "$root/BigData/blob.bin" ]] && echo yes || echo no)" "yes"
+
+  # a dir already claimed by a unit must not be double-reported
+  HEAVY_LIST=()
+  register_unit "claims-big" 2 1 "claims big" paths "$root/BigData"
+  discover_heavyweights
+  local dupe=0
+  for row in "${HEAVY_LIST[@]}"; do [[ "$row" == *"BigData"* ]] && dupe=1; done
+  st_assert "claimed dir excluded from report" "$dupe" "0"
+
+  st_assert "classify_dir names a class" \
+    "$(classify_dir "$root/BigData" | grep -cE '^(cache|data|mixed)$')" "1"
+  HEAVY_LIST=(); HEAVY_ROOTS=("$HOME")
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
