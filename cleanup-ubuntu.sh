@@ -74,6 +74,7 @@ DEPS_DAYS=0
 SITES_IDLE_DAYS=0
 SITES_ROOT="$HOME/Sites"
 CLAUDE_ROOT="$HOME/.claude"
+TMP_SWEEP_ROOT="/tmp"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -127,8 +128,6 @@ path_bytes() { [[ -e "$1" ]] && du -sb --apparent-size "$1" 2>/dev/null | awk '{
 # "--to=iec --suffix=B" printed 1048576 as "1.0MB", which is simply the wrong unit.
 human()      { numfmt --to=iec-i --suffix=B "${1:-0}" 2>/dev/null || echo "${1}B"; }
 
-# is a process matching regex running?
-is_running() { pgrep -af "$1" 2>/dev/null | grep -qvE 'pgrep|cleanup-ubuntu'; }
 
 # ---------------------------------------------------------------------------------
 # self-test harness (only active under --self-test)
@@ -195,7 +194,7 @@ st_run() {
 # an honest dry-run.
 # ---------------------------------------------------------------------------------
 U_IDS=()
-declare -A U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
+declare -A U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED U_MOUNTHINT
 
 # register_unit <id> <tier> <reversible> <label> <kind> <payload> [flag]
 #   kind=paths  payload = newline-delimited paths to delete
@@ -212,7 +211,12 @@ register_unit() {
   U_BYTES[$id]=0
   U_LOCKED[$id]=""
   U_MOUNT[$id]=""
+  U_MOUNTHINT[$id]=""
 }
+
+# A cmd unit has no paths to resolve a mount from, and some free space somewhere
+# other than $HOME — apt and journalctl both act on /. Tag those explicitly.
+unit_mount_hint() { U_MOUNTHINT[$1]=$2; }
 
 unit_paths() { printf '%s\n' "${U_PAYLOAD[$1]}"; }
 
@@ -222,7 +226,7 @@ probe_unit() {
   local -a plist=()
   if [[ "${U_KIND[$id]}" == cmd ]]; then
     U_BYTES[$id]=0
-    U_MOUNT[$id]=$(mount_of "$HOME")
+    U_MOUNT[$id]=$(mount_of "${U_MOUNTHINT[$id]:-$HOME}")
     return 0
   fi
   readarray -t plist < <(unit_paths "$id")
@@ -232,7 +236,7 @@ probe_unit() {
     b=$(path_bytes "$p")
     total=$(( total + b ))
   done
-  [[ -z "${U_MOUNT[$id]}" ]] && U_MOUNT[$id]=$(mount_of "$HOME")
+  [[ -z "${U_MOUNT[$id]}" ]] && U_MOUNT[$id]=$(mount_of "${U_MOUNTHINT[$id]:-$HOME}")
   U_BYTES[$id]=$total
 }
 
@@ -368,6 +372,278 @@ apply_locks() {
 }
 
 # ---------------------------------------------------------------------------------
+# built-in unit definitions
+#
+# tier 0 free | 1-3 regenerable (auto-escalation may select these)
+# ================= ceiling =================
+# tier 4-5 lossy (requires --allow-lossy)
+# ---------------------------------------------------------------------------------
+register_all_units() {
+  # --- tier 0: native cache cleaners, cost nothing, delete nothing precious ---
+  command -v npm      >/dev/null 2>&1 && register_unit npm-native      0 1 "npm cache clean"    cmd "npm cache clean --force"
+  command -v pnpm     >/dev/null 2>&1 && register_unit pnpm-native     0 1 "pnpm store prune"   cmd "pnpm store prune"
+  command -v yarn     >/dev/null 2>&1 && register_unit yarn-native     0 1 "yarn cache clean"   cmd "yarn cache clean"
+  command -v bun      >/dev/null 2>&1 && register_unit bun-native      0 1 "bun cache rm"       cmd "bun pm cache rm"
+  command -v go       >/dev/null 2>&1 && register_unit go-native       0 1 "go clean -cache"    cmd "go clean -cache -modcache"
+  command -v composer >/dev/null 2>&1 && register_unit composer-native 0 1 "composer clear"     cmd "composer clear-cache"
+  command -v pip      >/dev/null 2>&1 && register_unit pip-native      0 1 "pip cache purge"    cmd "pip cache purge"
+  command -v uv       >/dev/null 2>&1 && register_unit uv-native       0 1 "uv cache clean"     cmd "uv cache clean"
+
+  register_unit thumbnails 0 1 "thumbnails" paths "$HOME/.cache/thumbnails"
+  register_unit trash      0 1 "Trash"      paths "$HOME/.local/share/Trash/files
+$HOME/.local/share/Trash/info"
+  register_tmp_units
+
+  # --- tier 1: package-manager cache leftovers ---
+  register_unit npm-cacache   1 1 "npm _cacache"       paths "$HOME/.npm/_cacache"
+  register_unit npm-npx       1 1 "npm _npx"           paths "$HOME/.npm/_npx"
+  register_unit npm-logs      1 1 "npm _logs"          paths "$HOME/.npm/_logs"
+  register_unit yarn-classic  1 1 "yarn (classic)"     paths "$HOME/.cache/yarn"
+  register_unit yarn-berry    1 1 "yarn berry cache"   paths "$HOME/.yarn/berry/cache"
+  register_unit pnpm-cache    1 1 "pnpm cache"         paths "$HOME/.cache/pnpm"
+  register_unit pnpm-store    1 1 "pnpm store"         paths "$HOME/.local/share/pnpm/store"
+  register_unit bun-cache     1 1 "bun cache"          paths "$HOME/.bun/install/cache"
+  register_unit node-gyp      1 1 "node-gyp headers"   paths "$HOME/.cache/node-gyp"
+  register_unit go-build      1 1 "go build cache"     paths "$HOME/.cache/go-build"
+  register_unit go-modcache   1 1 "go module cache"    paths "$HOME/go/pkg/mod"
+  register_unit composer-c    1 1 "composer cache"     paths "$HOME/.cache/composer"
+  register_unit uv-cache      1 1 "uv cache"           paths "$HOME/.cache/uv"
+  register_unit pip-cache     1 1 "pip cache"          paths "$HOME/.cache/pip"
+  register_unit cargo-cache   1 1 "cargo registry"     paths "$HOME/.cargo/registry/cache
+$HOME/.cargo/registry/src"
+  register_unit phpactor      1 1 "phpactor index"     paths "$HOME/.cache/phpactor"
+  register_unit devtools-mcp  1 1 "chrome-devtools-mcp" paths "$HOME/.cache/chrome-devtools-mcp"
+  register_unit act-cache     1 1 "act (gh actions)"   paths "$HOME/.cache/act"
+  register_unit giget         1 1 "giget templates"    paths "$HOME/.cache/giget"
+
+  # --- tier 2: bigger regenerable artefacts ---
+  register_unit playwright 2 1 "playwright browsers" paths "$HOME/.cache/ms-playwright" "--playwright"
+  register_claude_job_units
+  register_claude_plugin_units
+
+  # --- tier 3: costs a reindex or a cold load ---
+  register_unit jetbrains-cache 3 1 "JetBrains caches" paths "$HOME/.cache/JetBrains" "--jetbrains"
+  register_browser_units
+
+  # --- tier 0/1 but on / rather than $HOME: only useful when / is the full one ---
+  register_system_units
+
+  # ================= auto-escalation ceiling =================
+
+  # --- tier 4: loses information ---
+  register_claude_history_units
+  register_dep_units
+  register_sites_idle_units
+
+  # --- tier 5: loses information, possibly irreplaceable ---
+  register_unit claude-vm      5 0 "Claude VM bundles" paths "$HOME/.config/Claude/vm_bundles" "--claude-vm"
+  register_unit docker-volumes 5 0 "docker volumes"    cmd   "docker volume prune -f" "--docker-volumes"
+  register_unit docker-prune   5 0 "docker prune"      cmd \
+    "docker builder prune -f; docker container prune -f; docker network prune -f; docker image prune $([[ ${DOCKER_ALL:-0} -eq 1 ]] && echo -af || echo -f)" \
+    "--docker"
+}
+
+# Stale /tmp leftovers we own. The protected pattern covers what a live desktop
+# session and a running Claude job need; the 60-minute floor keeps in-flight
+# temp files out of reach.
+register_tmp_units() {
+  local tmp_protected='^(claude-|cc-daemon|claude-mcp|\.X|\.ICE|\.XIM|\.font|com\.google\.Chrome|\.com\.google|org\.chromium|\.org\.chromium|scoped_dir|hsperfdata|systemd-private|snap-private|\.Test-unix|cef_server)'
+  local entry name
+  local -a hits=()
+  shopt -s nullglob dotglob
+  for entry in "$TMP_SWEEP_ROOT"/*; do
+    name=$(basename "$entry")
+    [[ "$(stat -c '%U' "$entry" 2>/dev/null)" == "$USER" ]] || continue
+    [[ "$name" =~ $tmp_protected ]] && continue
+    [[ -n "$(find "$entry" -maxdepth 0 -mmin -60 2>/dev/null)" ]] && continue
+    hits+=("$entry")
+  done
+  shopt -u nullglob dotglob
+  (( ${#hits[@]} )) || return 0
+  register_unit tmp-stale 0 1 "stale $TMP_SWEEP_ROOT files (${#hits[@]})" paths "$(printf '%s\n' "${hits[@]}")"
+  unit_mount_hint tmp-stale "$TMP_SWEEP_ROOT"
+}
+
+# apt cache, journal and superseded snap revisions. These free space on / only,
+# so they carry a mount hint — on a machine where /home is full and / is not,
+# the planner drops them instead of reporting a win that never lands.
+register_system_units() {
+  command -v apt-get >/dev/null 2>&1 && {
+    register_unit system-apt 0 1 "apt cache + orphan packages" cmd \
+      "sudo apt-get clean; sudo apt-get autoremove --purge -y" "--system"
+    unit_mount_hint system-apt /
+  }
+  command -v journalctl >/dev/null 2>&1 && {
+    register_unit system-journal 0 1 "journal older than 7d" cmd \
+      "sudo journalctl --vacuum-time=7d" "--system"
+    unit_mount_hint system-journal /
+  }
+  command -v snap >/dev/null 2>&1 && {
+    register_unit system-snaps 1 1 "superseded snap revisions" cmd \
+      'LANG=C snap list --all 2>/dev/null | awk "/disabled/{print \$1, \$3}" | while read -r sn rev; do sudo snap remove "$sn" --revision="$rev"; done' \
+      "--system"
+    unit_mount_hint system-snaps /
+  }
+}
+
+# Finished claude jobs. Same three guards as before: never this script's own job,
+# never one written to in the last hour, never a non-terminal state.
+register_claude_job_units() {
+  local jobs_root="$CLAUDE_ROOT/jobs"
+  [[ -d "$jobs_root" ]] || return 0
+  local self_job jd jid jstate age_days now_ts
+  self_job=$(basename "${CLAUDE_JOB_DIR:-/nonexistent}")
+  now_ts=$(date +%s)
+
+  for jd in "$jobs_root"/*/; do
+    jd=${jd%/}; [[ -d "$jd" ]] || continue
+    jid=$(basename "$jd")
+    [[ "$jid" == "$self_job" ]] && continue
+    [[ -n "$(find "$jd" -maxdepth 1 -mmin -60 2>/dev/null)" ]] && continue
+
+    jstate=none
+    if [[ -f "$jd/state.json" ]]; then
+      jstate=$(grep -oE '"state"[[:space:]]*:[[:space:]]*"[^"]+"' "$jd/state.json" |
+                 head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+      jstate=${jstate:-unknown}
+    fi
+    case "$jstate" in done|failed|none) ;; *) continue ;; esac
+
+    age_days=$(( (now_ts - $(stat -c %Y "$jd" 2>/dev/null || echo "$now_ts")) / 86400 ))
+    if (( age_days >= CLAUDE_JOBS_DAYS )); then
+      register_unit "claude-job-$jid" 2 1 "job $jid ($jstate, ${age_days}d)" paths "$jd" "--claude-jobs"
+    elif [[ -d "$jd/tmp" ]]; then
+      register_unit "claude-job-$jid" 2 1 "job $jid scratch ($jstate, ${age_days}d)" paths "$jd/tmp" "--claude-jobs"
+    fi
+  done
+}
+
+# Superseded plugin versions. Strictly version-shaped names only, so a
+# "1.3.0.bak-pre-sync" directory can never be mistaken for the newest release.
+register_claude_plugin_units() {
+  local plugin_cache="$CLAUDE_ROOT/plugins/cache" pdir pname newest v
+  [[ -d "$plugin_cache" ]] || return 0
+  local -a vers=()
+  for pdir in "$plugin_cache"/*/*/; do
+    pdir=${pdir%/}; [[ -d "$pdir" ]] || continue
+    readarray -t vers < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
+                            grep -E '^v?[0-9]+(\.[0-9]+)+$' | sort -V)
+    (( ${#vers[@]} > 1 )) || continue
+    newest="${vers[${#vers[@]}-1]}"
+    pname="$(basename "$(dirname "$pdir")")/$(basename "$pdir")"
+    for v in "${vers[@]}"; do
+      [[ "$v" == "$newest" ]] && continue
+      register_unit "claude-plugin-${pname//\//-}-$v" 2 1 "$pname $v" paths "$pdir/$v" "--claude-plugins"
+    done
+  done
+}
+
+# Browser HTTP caches. Profile data (history, passwords, Local Storage) is never
+# in these paths.
+register_browser_units() {
+  local root
+  local -a globbed=()
+  shopt -s nullglob
+  root="$HOME/.config/google-chrome"
+  if [[ -d "$root" ]]; then
+    globbed=("$root"/*/Cache "$root"/*/"Code Cache" "$root"/*/GPUCache)
+    (( ${#globbed[@]} )) && register_unit chrome-profile-cache 3 1 "Chrome profile caches" paths \
+      "$(printf '%s\n' "${globbed[@]}")" "--browsers"
+  fi
+  root="$HOME/.config/BraveSoftware/Brave-Browser"
+  if [[ -d "$root" ]]; then
+    globbed=("$root"/*/Cache "$root"/*/"Code Cache" "$root"/*/GPUCache)
+    (( ${#globbed[@]} )) && register_unit brave-profile-cache 3 1 "Brave profile caches" paths \
+      "$(printf '%s\n' "${globbed[@]}")" "--browsers"
+  fi
+  shopt -u nullglob
+  register_unit chrome-cache  3 1 "chrome ~/.cache" paths "$HOME/.cache/google-chrome
+$HOME/.cache/Google" "--browsers"
+  register_unit brave-cache   3 1 "brave ~/.cache"   paths "$HOME/.cache/BraveSoftware" "--browsers"
+  register_unit firefox-cache 3 1 "firefox ~/.cache" paths "$HOME/.cache/mozilla" "--browsers"
+}
+
+# LOSSY. Removes `claude --resume` for those sessions. memory/ is never touched.
+# The flag defaults to 0 meaning "not requested"; probing still wants a sane
+# window, so fall back to 30 days rather than +0, which would match everything
+# written before today.
+register_claude_history_units() {
+  local days=${CLAUDE_HISTORY_DAYS:-30}
+  (( days > 0 )) || days=30
+  local -a old=()
+  readarray -t old < <(find "$CLAUDE_ROOT/projects" -mindepth 2 -maxdepth 2 -type f \
+                         -name '*.jsonl' -mtime "+$days" 2>/dev/null)
+  (( ${#old[@]} )) && register_unit claude-history 4 0 "session transcripts (${#old[@]})" paths \
+    "$(printf '%s\n' "${old[@]}")" "--claude-history"
+
+  local d
+  for d in file-history shell-snapshots session-env paste-cache; do
+    local -a hits=()
+    readarray -t hits < <(find "$CLAUDE_ROOT/$d" -mindepth 1 -maxdepth 1 -mtime "+$days" 2>/dev/null)
+    (( ${#hits[@]} )) && register_unit "claude-$d" 4 0 "$d (${#hits[@]})" paths \
+      "$(printf '%s\n' "${hits[@]}")" "--claude-history"
+  done
+}
+
+# LOSSY. A dependency dir is only registered when its manifest sits beside it,
+# so an unrelated directory named "vendor" is never touched.
+register_dep_units() {
+  local days=${DEPS_DAYS:-0}
+  (( days > 0 )) || return 0
+  local -a roots=() ; local r nm vd
+  for r in "$HOME/Projects" "$HOME/Sites" "$HOME/code" "$HOME/dev"; do
+    [[ -d "$r" ]] && roots+=("$r")
+  done
+  (( ${#roots[@]} )) || return 0
+
+  while IFS= read -r nm; do
+    [[ -z "$nm" ]] && continue
+    [[ -f "$(dirname "$nm")/package.json" ]] || continue
+    register_unit "deps-nm-${nm//\//-}" 4 0 "nm  $(dirname "$nm" | sed "s#$HOME#~#")" paths "$nm" "--deps"
+  done < <(find "${roots[@]}" -maxdepth 6 -type d -name node_modules -prune -mtime "+$days" 2>/dev/null)
+
+  while IFS= read -r vd; do
+    [[ -z "$vd" ]] && continue
+    [[ -f "$(dirname "$vd")/composer.json" ]] || continue
+    register_unit "deps-vendor-${vd//\//-}" 4 0 "vendor  $(dirname "$vd" | sed "s#$HOME#~#")" paths "$vd" "--deps"
+  done < <(find "${roots[@]}" -maxdepth 6 -type d -name vendor -prune -mtime "+$days" 2>/dev/null)
+}
+
+# LOSSY. Judges the whole project's activity rather than the dependency folder's
+# timestamp, so a site you touched last week keeps its deps even when the deps
+# themselves look stale, and a dormant site is cleared even when something inside
+# node_modules has a fresh mtime.
+register_sites_idle_units() {
+  local days=${SITES_IDLE_DAYS:-0}
+  (( days > 0 )) || return 0
+  [[ -d "$SITES_ROOT" ]] || return 0
+  local site newest idle now_ts nm vd base
+  now_ts=$(date +%s)
+
+  for site in "$SITES_ROOT"/*/; do
+    site=${site%/}; [[ -d "$site" ]] || continue
+    newest=$(find "$site" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' \
+               -not -path '*/vendor/*' -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+    newest=${newest%.*}; [[ -z "$newest" ]] && newest=0
+    idle=$(( (now_ts - newest) / 86400 ))
+    (( idle > days )) || continue
+    base=$(basename "$site")
+
+    while IFS= read -r nm; do
+      [[ -z "$nm" ]] && continue
+      [[ -f "$(dirname "$nm")/package.json" ]] || continue
+      register_unit "idle-nm-${nm//\//-}" 4 0 "$base/…/node_modules (${idle}d idle)" paths "$nm" "--sites-idle"
+    done < <(find "$site" -maxdepth 6 -type d -name node_modules -prune 2>/dev/null)
+
+    while IFS= read -r vd; do
+      [[ -z "$vd" ]] && continue
+      [[ -f "$(dirname "$vd")/composer.json" ]] || continue
+      register_unit "idle-vendor-${vd//\//-}" 4 0 "$base/…/vendor (${idle}d idle)" paths "$vd" "--sites-idle"
+    done < <(find "$site" -maxdepth 6 -type d -name vendor -prune 2>/dev/null)
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -461,8 +737,8 @@ sttest_mounts() {
 # Reset the registry to empty. Every registry-touching test starts here so the
 # tests cannot leak units into each other.
 st_reset_registry() {
-  U_IDS=(); unset U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
-  declare -gA U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
+  U_IDS=(); unset U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED U_MOUNTHINT
+  declare -gA U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED U_MOUNTHINT
 }
 
 sttest_registry() {
@@ -542,47 +818,93 @@ sttest_locks() {
   LOCK_RX=("${saved_rx[@]}"); LOCK_ROOTS=("${saved_roots[@]}"); LOCK_NAME=("${saved_name[@]}")
 }
 
-# ---------------------------------------------------------------------------------
-# core: report + (optionally) delete a path. Adds to TOTAL_BYTES when acted on.
-#   reclaim <label> <path...>
-# ---------------------------------------------------------------------------------
-reclaim() {
-  local label="$1"; shift
-  local total=0 p b
-  for p in "$@"; do
-    [[ -e "$p" ]] || continue
-    b=$(path_bytes "$p"); total=$((total + b))
+sttest_builtin_units() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  # Point the machine-dependent scans at the fixture, so the tier assertions do
+  # not depend on whether this particular box happens to have stale /tmp entries
+  # or month-old transcripts lying around.
+  local saved_claude="$CLAUDE_ROOT" saved_tmp="$TMP_SWEEP_ROOT"
+  CLAUDE_ROOT="$root/claude"; TMP_SWEEP_ROOT="$root/tmp"
+  mkdir -p "$CLAUDE_ROOT/projects/proj" "$TMP_SWEEP_ROOT"
+  truncate -s 1M "$CLAUDE_ROOT/projects/proj/old-session.jsonl"
+  touch -d '400 days ago' "$CLAUDE_ROOT/projects/proj/old-session.jsonl"
+  truncate -s 1M "$TMP_SWEEP_ROOT/leftover.bin"
+  touch -d '2 days ago' "$TMP_SWEEP_ROOT/leftover.bin"
+
+  register_all_units
+  CLAUDE_ROOT="$saved_claude"; TMP_SWEEP_ROOT="$saved_tmp"
+
+  st_assert_ne "units were registered" "${#U_IDS[@]}" "0"
+
+  # tier assignment matches the spec
+  st_assert "npm cache is tier 1"        "${U_TIER[npm-cacache]}"      "1"
+  st_assert "playwright is tier 2"       "${U_TIER[playwright]}"       "2"
+  st_assert "jetbrains cache is tier 3"  "${U_TIER[jetbrains-cache]}"  "3"
+  st_assert "claude history is tier 4"   "${U_TIER[claude-history]}"   "4"
+  st_assert "docker volumes are tier 5"  "${U_TIER[docker-volumes]}"   "5"
+  st_assert "tmp sweep is tier 0"        "${U_TIER[tmp-stale]}"        "0"
+
+  # reversibility must track the ceiling exactly
+  local id bad=0
+  for id in "${U_IDS[@]}"; do
+    if (( ${U_TIER[$id]} <= 3 )) && [[ "${U_REV[$id]}" != 1 ]]; then bad=1; fi
+    if (( ${U_TIER[$id]} >= 4 )) && [[ "${U_REV[$id]}" != 0 ]]; then bad=1; fi
   done
-  [[ $total -eq 0 ]] && return 0
-  if [[ $APPLY -eq 1 ]]; then
-    for p in "$@"; do [[ -e "$p" ]] && chmod -R u+w "$p" 2>/dev/null; rm -rf -- "$p" 2>/dev/null; done
-    printf '  %s✓%s %-34s %s%s%s freed\n' "$C_GRN" "$C_RESET" "$label" "$C_GRN" "$(human "$total")" "$C_RESET"
-  else
-    printf '  %s•%s %-34s %s%s%s reclaimable\n' "$C_CYN" "$C_RESET" "$label" "$C_B" "$(human "$total")" "$C_RESET"
-  fi
-  TOTAL_BYTES=$((TOTAL_BYTES + total))
+  st_assert "reversible flag matches tier for every unit" "$bad" "0"
+
+  # legacy flags stay wired to their unit
+  st_assert "playwright keeps its flag"  "${U_FLAG[playwright]}"       "--playwright"
+  st_assert "jetbrains keeps its flag"   "${U_FLAG[jetbrains-cache]}"  "--jetbrains"
+  st_assert "claude-history keeps flag"  "${U_FLAG[claude-history]}"   "--claude-history"
+
+  # --system frees space on / only, so it must be tagged to that mount or the
+  # planner would offer it while /home is the partition under pressure
+  st_assert "apt unit keeps --system flag" "${U_FLAG[system-apt]}" "--system"
+  probe_unit system-apt
+  st_assert "apt unit is tagged to /"      "${U_MOUNT[system-apt]}" "/"
+
+  # no duplicate ids
+  local dupes
+  dupes=$(printf '%s\n' "${U_IDS[@]}" | sort | uniq -d | wc -l)
+  st_assert "no duplicate unit ids" "$dupes" "0"
+
+  # every unit must carry a non-empty label and a known kind
+  local badmeta=0
+  for id in "${U_IDS[@]}"; do
+    [[ -z "${U_LABEL[$id]}" ]] && badmeta=1
+    case "${U_KIND[$id]}" in paths|cmd) ;; *) badmeta=1 ;; esac
+  done
+  st_assert "every unit has a label and valid kind" "$badmeta" "0"
 }
 
-# run a native cache-clean command (only when --apply); report is best-effort.
-run_clean() { # run_clean <label> <cmd...>
-  local label="$1"; shift
-  command -v "$1" >/dev/null 2>&1 || return 0
-  if [[ $APPLY -eq 1 ]]; then
-    "$@" >/dev/null 2>&1 && printf '  %s✓%s %s\n' "$C_GRN" "$C_RESET" "$label (native clean)"
-  else
-    printf '  %s•%s %s\n' "$C_CYN" "$C_RESET" "$label — would run: $*"
-  fi
-}
+sttest_sites_idle_units() {
+  local root; root=$(st_fixture)
+  st_reset_registry
 
-# reclaim direct children of <dir> not modified in <days> days.
-#   reclaim_stale <label> <dir> <days> [extra find predicates...]
-reclaim_stale() {
-  local label="$1" dir="$2" days="$3"; shift 3
-  [[ -d "$dir" ]] || return 0
-  local -a hits=()
-  mapfile -t hits < <(find "$dir" -mindepth 1 -maxdepth 1 -mtime "+$days" "$@" 2>/dev/null)
-  (( ${#hits[@]} )) || return 0
-  reclaim "$label (${#hits[@]})" "${hits[@]}"
+  # a dormant project with deps beside its manifest, and an active one
+  mkdir -p "$root/sites/dormant/node_modules" "$root/sites/active/node_modules"
+  touch "$root/sites/dormant/package.json" "$root/sites/active/package.json"
+  truncate -s 2M "$root/sites/dormant/node_modules/lib.js"
+  truncate -s 2M "$root/sites/active/node_modules/lib.js"
+  # backdate the dormant project's sources well past the idle threshold
+  touch -d '400 days ago' "$root/sites/dormant/package.json"
+
+  SITES_IDLE_DAYS=30 SITES_ROOT="$root/sites"
+  register_sites_idle_units
+  SITES_IDLE_DAYS=0
+
+  local dormant=0 active=0 id
+  for id in "${U_IDS[@]}"; do
+    [[ "${U_PAYLOAD[$id]}" == *"/dormant/"* ]] && dormant=1
+    [[ "${U_PAYLOAD[$id]}" == *"/active/"*  ]] && active=1
+  done
+  st_assert "dormant site deps registered"   "$dormant" "1"
+  st_assert "ACTIVE site deps left alone"    "$active"  "0"
+  for id in "${U_IDS[@]}"; do
+    st_assert "sites-idle unit $id is lossy tier 4" "${U_TIER[$id]}/${U_REV[$id]}" "4/0"
+  done
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
@@ -611,371 +933,6 @@ else
   printf '%sAPPLY MODE%s — caches will be deleted.\n' "$C_RED" "$C_RESET"
 fi
 df -h "$HOME" | awk 'NR==1||NR==2'
-
-# ---------------------------------------------------------------------------------
-# 1. JavaScript / Node package-manager caches
-# ---------------------------------------------------------------------------------
-section "JS / Node package caches"
-run_clean "npm"        npm cache clean --force
-run_clean "pnpm store" pnpm store prune
-run_clean "yarn"       yarn cache clean
-command -v bun >/dev/null 2>&1 && run_clean "bun" bun pm cache rm
-reclaim "npm _cacache"      "$HOME/.npm/_cacache"
-reclaim "npm _npx"          "$HOME/.npm/_npx"
-reclaim "npm _logs"         "$HOME/.npm/_logs"
-reclaim "yarn (classic)"    "$HOME/.cache/yarn"
-reclaim "yarn berry cache"  "$HOME/.yarn/berry/cache"
-reclaim "pnpm cache"        "$HOME/.cache/pnpm"
-reclaim "pnpm store"        "$HOME/.local/share/pnpm/store"
-reclaim "bun cache"         "$HOME/.bun/install/cache"
-reclaim "node-gyp headers"  "$HOME/.cache/node-gyp"
-
-# ---------------------------------------------------------------------------------
-# 2. Other language / toolchain caches
-# ---------------------------------------------------------------------------------
-section "Other language caches"
-run_clean "go build+mod" go clean -cache -modcache
-run_clean "composer"     composer clear-cache
-run_clean "pip"          pip cache purge
-run_clean "uv"           uv cache clean
-if command -v cargo-cache >/dev/null 2>&1; then
-  run_clean "cargo" cargo-cache -a
-else
-  reclaim "cargo registry cache" "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/src"
-fi
-reclaim "go build cache"  "$HOME/.cache/go-build"
-reclaim "go module cache" "$HOME/go/pkg/mod"    # go clean handles perms; this catches leftovers
-reclaim "composer cache"  "$HOME/.cache/composer"
-reclaim "uv cache"        "$HOME/.cache/uv"
-reclaim "pip cache"       "$HOME/.cache/pip"
-
-# ---------------------------------------------------------------------------------
-# 3. Dev-tool / misc app caches (regenerable)
-# ---------------------------------------------------------------------------------
-section "Dev-tool & misc caches"
-reclaim "phpactor index"     "$HOME/.cache/phpactor"
-reclaim "chrome-devtools-mcp" "$HOME/.cache/chrome-devtools-mcp"
-reclaim "act (gh actions)"   "$HOME/.cache/act"
-reclaim "giget templates"    "$HOME/.cache/giget"
-reclaim "thumbnails"         "$HOME/.cache/thumbnails"
-reclaim "Trash"              "$HOME/.local/share/Trash/files" "$HOME/.local/share/Trash/info"
-
-# ---------------------------------------------------------------------------------
-# 4. Playwright browser binaries (opt-in — you must reinstall to use Playwright)
-# ---------------------------------------------------------------------------------
-if [[ $DO_PLAYWRIGHT -eq 1 ]]; then
-  section "Playwright browsers"
-  info "after this, run: npx playwright install  (to restore)"
-  reclaim "ms-playwright browsers" "$HOME/.cache/ms-playwright"
-fi
-
-# ---------------------------------------------------------------------------------
-# 5. Browser HTTP caches — ONLY for browsers that are NOT running
-#    (clears the disk cache subdirs only; never profiles/history/passwords)
-# ---------------------------------------------------------------------------------
-if [[ $DO_BROWSERS -eq 1 ]]; then
-  section "Browser HTTP caches (idle browsers only)"
-  clear_browser_cache() { # <name> <proc-regex> <config-root>
-    local name="$1" rx="$2" root="$3"
-    [[ -d "$root" ]] || return 0
-    if is_running "$rx"; then skip "$name is running — leaving its cache"; return 0; fi
-    # chromium-family: <profile>/Cache, Code Cache, GPUCache ; firefox: cache2 under ~/.cache
-    reclaim "$name cache" \
-      "$root"/*/Cache "$root"/*/"Code Cache" "$root"/*/GPUCache \
-      "$root"/Default/Cache "$root"/Default/"Code Cache"
-  }
-  clear_browser_cache "Google Chrome" 'chrome'  "$HOME/.config/google-chrome"
-  clear_browser_cache "Brave"         'brave'   "$HOME/.config/BraveSoftware/Brave-Browser"
-  # chromium HTTP caches under ~/.cache too
-  is_running 'chrome' || reclaim "chrome ~/.cache"  "$HOME/.cache/google-chrome"
-  is_running 'brave'  || reclaim "brave ~/.cache"   "$HOME/.cache/BraveSoftware"
-  is_running 'firefox' || reclaim "firefox ~/.cache" "$HOME/.cache/mozilla"
-fi
-
-# ---------------------------------------------------------------------------------
-# 6. JetBrains IDE caches — only if no JetBrains process is running
-# ---------------------------------------------------------------------------------
-if [[ $DO_JETBRAINS -eq 1 ]]; then
-  section "JetBrains caches"
-  if is_running 'jetbrains|idea|pycharm|phpstorm|webstorm|goland|clion|rider|rubymine|datagrip'; then
-    skip "a JetBrains IDE is running — close it first (would corrupt indexes)"
-  elif confirm "clear JetBrains caches (forces reindex on next open)?"; then
-    reclaim "JetBrains cache" "$HOME/.cache/JetBrains"
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 7. /tmp user leftovers — protect live infrastructure
-# ---------------------------------------------------------------------------------
-section "/tmp user leftovers"
-# Protected name patterns: things a running session/desktop needs.
-tmp_protected='^(claude-|cc-daemon|claude-mcp|\.X|\.ICE|\.XIM|\.font|com\.google\.Chrome|\.com\.google|org\.chromium|\.org\.chromium|scoped_dir|hsperfdata|systemd-private|snap-private|\.Test-unix|cef_server)'
-shopt -s nullglob dotglob
-tmp_freed=0
-for entry in /tmp/*; do
-  name=$(basename "$entry")
-  # only our own files
-  [[ "$(stat -c '%U' "$entry" 2>/dev/null)" == "$USER" ]] || { continue; }
-  if [[ "$name" =~ $tmp_protected ]]; then continue; fi
-  # only stale: not modified in last 60 min (avoids nuking in-flight temp)
-  if [[ -n "$(find "$entry" -maxdepth 0 -mmin -60 2>/dev/null)" ]]; then continue; fi
-  b=$(path_bytes "$entry"); tmp_freed=$((tmp_freed + b))
-  [[ $APPLY -eq 1 ]] && { chmod -R u+w "$entry" 2>/dev/null; rm -rf -- "$entry" 2>/dev/null; }
-done
-shopt -u nullglob dotglob
-if [[ $tmp_freed -gt 0 ]]; then
-  if [[ $APPLY -eq 1 ]]; then printf '  %s✓%s stale /tmp files              %s%s freed\n' "$C_GRN" "$C_RESET" "$C_GRN" "$(human "$tmp_freed")$C_RESET"
-  else printf '  %s•%s stale /tmp files              %s%s reclaimable\n' "$C_CYN" "$C_RESET" "$C_B" "$(human "$tmp_freed")$C_RESET"; fi
-  TOTAL_BYTES=$((TOTAL_BYTES + tmp_freed))
-else info "nothing stale"; fi
-kept "live infra (claude/X11/chrome/systemd/…) protected"
-
-# ---------------------------------------------------------------------------------
-# 8. Docker — only unused resources; never named volumes unless asked
-# ---------------------------------------------------------------------------------
-if [[ $DO_DOCKER -eq 1 ]]; then
-  section "Docker"
-  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    skip "docker not available / daemon not reachable"
-  else
-    docker system df 2>/dev/null | sed 's/^/  /'
-    if confirm "prune unused Docker data?"; then
-      if [[ $APPLY -eq 1 ]]; then
-        docker builder prune -f     >/dev/null 2>&1 && info "build cache pruned"
-        docker container prune -f    >/dev/null 2>&1 && info "stopped containers pruned"
-        docker network prune -f      >/dev/null 2>&1 && info "unused networks pruned"
-        if [[ $DOCKER_ALL -eq 1 ]]; then docker image prune -af >/dev/null 2>&1 && info "ALL unused images pruned"
-        else docker image prune -f  >/dev/null 2>&1 && info "dangling images pruned"; fi
-        if [[ $DOCKER_VOLUMES -eq 1 ]]; then
-          printf '  %s⚠ pruning unused volumes — this can delete database data%s\n' "$C_RED" "$C_RESET"
-          docker volume prune -f >/dev/null 2>&1 && info "unused volumes pruned"
-        else kept "named volumes preserved (use --docker-volumes to prune)"; fi
-      else
-        info "would prune: build cache, stopped containers, unused networks$([[ $DOCKER_ALL -eq 1 ]] && echo ', ALL unused images' || echo ', dangling images')$([[ $DOCKER_VOLUMES -eq 1 ]] && echo ', unused volumes')"
-        kept "named volumes preserved unless --docker-volumes"
-      fi
-    fi
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 9. Stale dependency dirs — node_modules + composer vendor (opt-in, age-filtered)
-#    A dir is only removed when its package manifest sits beside it, so unrelated
-#    directories that happen to be named "vendor"/"node_modules" are never touched.
-# ---------------------------------------------------------------------------------
-if [[ ${DEPS_DAYS:-0} -gt 0 ]]; then
-  section "Stale dependency dirs (> ${DEPS_DAYS}d untouched)"
-  info "searching ~/Projects, ~/Sites, ~/code, ~/dev … (restore with npm/composer install)"
-  DEPS_ROOTS=()
-  for r in "$HOME/Projects" "$HOME/Sites" "$HOME/code" "$HOME/dev"; do [[ -d "$r" ]] && DEPS_ROOTS+=("$r"); done
-  if [[ ${#DEPS_ROOTS[@]} -eq 0 ]]; then
-    skip "no project roots found"
-  else
-    # node_modules — keep only if a package.json is its sibling
-    while IFS= read -r nm; do
-      [[ -z "$nm" ]] && continue
-      [[ -f "$(dirname "$nm")/package.json" ]] || continue
-      reclaim "nm  $(dirname "$nm" | sed "s#$HOME#~#")" "$nm"
-    done < <(find "${DEPS_ROOTS[@]}" -maxdepth 6 -type d -name node_modules -prune -mtime "+$DEPS_DAYS" 2>/dev/null)
-    # composer vendor — only when a composer.json is its sibling
-    while IFS= read -r vd; do
-      [[ -z "$vd" ]] && continue
-      [[ -f "$(dirname "$vd")/composer.json" ]] || continue
-      reclaim "vendor  $(dirname "$vd" | sed "s#$HOME#~#")" "$vd"
-    done < <(find "${DEPS_ROOTS[@]}" -maxdepth 6 -type d -name vendor -prune -mtime "+$DEPS_DAYS" 2>/dev/null)
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 9b. Dormant-site deps — clear node_modules/vendor only in projects whose newest
-#     source file (ignoring .git/node_modules/vendor) is older than DAYS. This
-#     protects sites you touched recently even if their deps look old, and clears
-#     idle sites even if a stray file inside deps has a fresh timestamp.
-# ---------------------------------------------------------------------------------
-if [[ ${SITES_IDLE_DAYS:-0} -gt 0 ]]; then
-  section "Dormant-site deps (idle > ${SITES_IDLE_DAYS}d in ${SITES_ROOT/#$HOME/~})"
-  if [[ ! -d "$SITES_ROOT" ]]; then
-    skip "no such dir: $SITES_ROOT"
-  else
-    now_ts=$(date +%s)
-    for site in "$SITES_ROOT"/*/; do
-      site=${site%/}
-      [[ -d "$site" ]] || continue
-      newest=$(find "$site" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/vendor/*' \
-                 -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-      newest=${newest%.*}; [[ -z "$newest" ]] && newest=0
-      idle=$(( (now_ts - newest) / 86400 ))
-      if (( idle <= SITES_IDLE_DAYS )); then
-        kept "$(basename "$site") — active (${idle}d idle)"
-        continue
-      fi
-      found=0
-      while IFS= read -r nm; do
-        [[ -z "$nm" ]] && continue
-        [[ -f "$(dirname "$nm")/package.json" ]] || continue
-        found=1; reclaim "$(basename "$site")/…/node_modules" "$nm"
-      done < <(find "$site" -maxdepth 6 -type d -name node_modules -prune 2>/dev/null)
-      while IFS= read -r vd; do
-        [[ -z "$vd" ]] && continue
-        [[ -f "$(dirname "$vd")/composer.json" ]] || continue
-        found=1; reclaim "$(basename "$site")/…/vendor" "$vd"
-      done < <(find "$site" -maxdepth 6 -type d -name vendor -prune 2>/dev/null)
-      (( found == 0 )) && kept "$(basename "$site") — dormant (${idle}d) but no deps"
-    done
-    info "restore any site later with: npm install / composer install"
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 10. Claude Desktop VM bundles (opt-in, risky — GB re-download)
-# ---------------------------------------------------------------------------------
-if [[ $DO_CLAUDE_VM -eq 1 ]]; then
-  section "Claude Desktop VM bundles"
-  if is_running 'claude-desktop|/opt/Claude'; then
-    skip "Claude Desktop is running — close it before removing VM bundles"
-  elif confirm "remove Claude VM bundles (re-downloads several GB on next use)?"; then
-    reclaim "Claude vm_bundles" "$HOME/.config/Claude/vm_bundles"
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 10b. Claude Code background-job dirs (~/.claude/jobs) — opt-in
-#      Each job dir holds state.json + timeline.jsonl + a tmp/ scratch space that
-#      agents are told to use. That scratch regularly ends up holding whole
-#      node_modules trees, so it is usually the single biggest thing in ~/.claude.
-#
-#      Three guards, all of which must pass before a job is touched:
-#        1. it is not the job this script is running inside ($CLAUDE_JOB_DIR)
-#        2. nothing in it was written in the last 60 minutes
-#        3. its state is terminal (done/failed) — never running, never blocked
-#           (blocked means a job is waiting on you and can still be resumed)
-# ---------------------------------------------------------------------------------
-if [[ $DO_CLAUDE_JOBS -eq 1 ]]; then
-  section "Claude job dirs (finished; whole dir if > ${CLAUDE_JOBS_DAYS}d, else scratch only)"
-  jobs_root="$CLAUDE_ROOT/jobs"
-  if [[ ! -d "$jobs_root" ]]; then
-    skip "no $jobs_root"
-  else
-    self_job=$(basename "${CLAUDE_JOB_DIR:-/nonexistent}")
-    now_ts=$(date +%s)
-    for jd in "$jobs_root"/*/; do
-      jd=${jd%/}
-      [[ -d "$jd" ]] || continue
-      jid=$(basename "$jd")
-
-      if [[ "$jid" == "$self_job" ]]; then
-        kept "$jid — this script's own job"; continue
-      fi
-      # the daemon rewrites state.json/timeline.jsonl every turn, so a fresh mtime
-      # on any direct child means the job is very likely still live
-      if [[ -n "$(find "$jd" -maxdepth 1 -mmin -60 2>/dev/null)" ]]; then
-        kept "$jid — written to within the hour"; continue
-      fi
-
-      jstate=none
-      if [[ -f "$jd/state.json" ]]; then
-        jstate=$(grep -oE '"state"[[:space:]]*:[[:space:]]*"[^"]+"' "$jd/state.json" |
-                   head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-        jstate=${jstate:-unknown}
-      fi
-      case "$jstate" in
-        done|failed) ;;                 # terminal — eligible
-        none)        ;;                 # no state file: an orphaned stub, age-gated below
-        *) kept "$jid — state=$jstate (not finished)"; continue ;;
-      esac
-
-      age_days=$(( (now_ts - $(stat -c %Y "$jd" 2>/dev/null || echo "$now_ts")) / 86400 ))
-      if (( age_days >= CLAUDE_JOBS_DAYS )); then
-        reclaim "job $jid ($jstate, ${age_days}d)" "$jd"
-      elif [[ -d "$jd/tmp" ]]; then
-        # too recent to drop the record, but tmp/ is documented throwaway scratch
-        reclaim "job $jid scratch ($jstate, ${age_days}d)" "$jd/tmp"
-      else
-        kept "$jid — $jstate, ${age_days}d, no scratch"
-      fi
-    done
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 10c. Superseded Claude plugin versions (~/.claude/plugins/cache/<market>/<plugin>/)
-#      Plugins are cached per version and old versions are never garbage-collected,
-#      so a plugin that vendors node_modules leaves a full copy behind on every
-#      upgrade. Keeps the newest version of each plugin, drops the rest.
-# ---------------------------------------------------------------------------------
-if [[ $DO_CLAUDE_PLUGINS -eq 1 ]]; then
-  section "Superseded Claude plugin versions"
-  plugin_cache="$CLAUDE_ROOT/plugins/cache"
-  if [[ ! -d "$plugin_cache" ]]; then
-    skip "no $plugin_cache"
-  else
-    info "an active session holding an old version keeps working until it restarts"
-    for pdir in "$plugin_cache"/*/*/; do
-      pdir=${pdir%/}
-      [[ -d "$pdir" ]] || continue
-      vers=()
-      # strictly version-shaped names only — a "1.3.0.bak-pre-sync" dir must never
-      # be mistaken for the newest release and win over the real 1.3.0
-      mapfile -t vers < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
-                            grep -E '^v?[0-9]+(\.[0-9]+)+$' | sort -V)
-      (( ${#vers[@]} > 1 )) || continue
-      newest="${vers[${#vers[@]}-1]}"
-      pname="$(basename "$(dirname "$pdir")")/$(basename "$pdir")"
-      for v in "${vers[@]}"; do
-        [[ "$v" == "$newest" ]] && continue
-        reclaim "$pname $v" "$pdir/$v"
-      done
-      kept "$pname — keeping $newest"
-    done
-  fi
-fi
-
-# ---------------------------------------------------------------------------------
-# 10d. Claude session history (opt-in, destructive to `claude --resume`)
-#      Only top-level *.jsonl transcripts are removed. memory/ directories and
-#      per-session subdirectories inside ~/.claude/projects are never touched.
-# ---------------------------------------------------------------------------------
-if [[ ${CLAUDE_HISTORY_DAYS:-0} -gt 0 ]]; then
-  section "Claude session history (> ${CLAUDE_HISTORY_DAYS}d)"
-  info "${C_YEL}⚠${C_RESET} removes 'claude --resume' for those sessions; memory/ is never touched"
-  old_jsonl=()
-  mapfile -t old_jsonl < <(find "$CLAUDE_ROOT/projects" -mindepth 2 -maxdepth 2 -type f \
-                             -name '*.jsonl' -mtime "+$CLAUDE_HISTORY_DAYS" 2>/dev/null)
-  if (( ${#old_jsonl[@]} )); then
-    reclaim "session transcripts (${#old_jsonl[@]})" "${old_jsonl[@]}"
-  else
-    info "no transcripts older than ${CLAUDE_HISTORY_DAYS}d (Claude Code prunes these itself)"
-  fi
-  reclaim_stale "file-history"    "$CLAUDE_ROOT/file-history"    "$CLAUDE_HISTORY_DAYS"
-  reclaim_stale "shell snapshots" "$CLAUDE_ROOT/shell-snapshots" "$CLAUDE_HISTORY_DAYS"
-  reclaim_stale "session env"     "$CLAUDE_ROOT/session-env"     "$CLAUDE_HISTORY_DAYS"
-  reclaim_stale "paste cache"     "$CLAUDE_ROOT/paste-cache"     "$CLAUDE_HISTORY_DAYS"
-  kept "settings, memory/, plugins and todos preserved"
-fi
-
-# ---------------------------------------------------------------------------------
-# 11. System-level (opt-in, sudo): apt, journal, old snap revisions
-# ---------------------------------------------------------------------------------
-if [[ $DO_SYSTEM -eq 1 ]]; then
-  section "System (sudo)"
-  if [[ $APPLY -eq 1 ]]; then
-    sudo -v || { skip "no sudo — skipping system cleanup"; DO_SYSTEM=0; }
-  fi
-  if [[ $DO_SYSTEM -eq 1 ]]; then
-    if [[ $APPLY -eq 1 ]]; then
-      sudo apt-get clean         >/dev/null 2>&1 && info "apt cache cleaned"
-      sudo apt-get autoremove --purge -y >/dev/null 2>&1 && info "orphan packages removed"
-      sudo journalctl --vacuum-time=7d 2>&1 | tail -1 | sed 's/^/  /'
-      # drop old snap revisions (keep current)
-      if command -v snap >/dev/null 2>&1; then
-        LANG=C snap list --all 2>/dev/null | awk '/disabled/{print $1, $3}' |
-          while read -r sn rev; do sudo snap remove "$sn" --revision="$rev" >/dev/null 2>&1 && info "snap $sn r$rev removed"; done
-      fi
-    else
-      info "would run: apt-get clean; apt-get autoremove --purge; journalctl --vacuum-time=7d; drop old snap revisions"
-    fi
-  fi
-fi
 
 # ---------------------------------------------------------------------------------
 # summary
