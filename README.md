@@ -27,3 +27,7 @@ docs/superpowers/plans/              implementation plans
 Adaptive cleanup — goal-driven (`--free 12G`), pressure-driven (`--auto`),
 discovery of unknown app caches, and per-filesystem targeting.
 See `docs/superpowers/specs/2026-08-09-cleanup-ubuntu-adaptive-design.md`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
