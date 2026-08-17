@@ -63,6 +63,7 @@ set -uo pipefail
 # config / flags
 # ---------------------------------------------------------------------------------
 APPLY=0  ASSUME_YES=0
+SELF_TEST=0
 DO_DOCKER=0 DOCKER_ALL=0 DOCKER_VOLUMES=0
 DO_JETBRAINS=0 DO_BROWSERS=0 DO_PLAYWRIGHT=0
 DO_SYSTEM=0 DO_CLAUDE_VM=0
@@ -97,6 +98,7 @@ while [[ $# -gt 0 ]]; do
     --claude-history) CLAUDE_HISTORY_DAYS="${2:-30}"
                       [[ "${2:-}" =~ ^[0-9]+$ ]] && shift ;;
     --claude-all)     DO_CLAUDE_JOBS=1; DO_CLAUDE_PLUGINS=1 ;;
+    --self-test)      SELF_TEST=1 ;;
     -h|--help)        grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1  (try --help)" >&2; exit 2 ;;
   esac
@@ -121,10 +123,79 @@ kept()    { printf '  %skeep%s  %s\n' "$C_DIM" "$C_RESET" "$1"; }
 
 # bytes of a path (0 if missing). Uses apparent size in blocks -> bytes.
 path_bytes() { [[ -e "$1" ]] && du -sb --apparent-size "$1" 2>/dev/null | awk '{print $1}' || echo 0; }
-human()      { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1}B"; }
+# iec-i, not iec: these are binary multiples, so they must be labelled MiB/GiB.
+# "--to=iec --suffix=B" printed 1048576 as "1.0MB", which is simply the wrong unit.
+human()      { numfmt --to=iec-i --suffix=B "${1:-0}" 2>/dev/null || echo "${1}B"; }
 
 # is a process matching regex running?
 is_running() { pgrep -af "$1" 2>/dev/null | grep -qvE 'pgrep|cleanup-ubuntu'; }
+
+# ---------------------------------------------------------------------------------
+# self-test harness (only active under --self-test)
+# ---------------------------------------------------------------------------------
+ST_PASS=0 ST_FAIL=0 ST_ROOT=""
+
+st_assert() { # st_assert <desc> <actual> <expected>
+  if [[ "$2" == "$3" ]]; then
+    ST_PASS=$((ST_PASS + 1)); printf '  %sok%s   %s\n' "$C_GRN" "$C_RESET" "$1"
+  else
+    ST_FAIL=$((ST_FAIL + 1))
+    printf '  %sFAIL%s %s\n       got:      %s\n       expected: %s\n' \
+      "$C_RED" "$C_RESET" "$1" "$2" "$3"
+  fi
+}
+
+st_assert_ne() { # st_assert_ne <desc> <actual> <unexpected>
+  if [[ "$2" != "$3" ]]; then
+    ST_PASS=$((ST_PASS + 1)); printf '  %sok%s   %s\n' "$C_GRN" "$C_RESET" "$1"
+  else
+    ST_FAIL=$((ST_FAIL + 1))
+    printf '  %sFAIL%s %s\n       got %s, which should have differed\n' \
+      "$C_RED" "$C_RESET" "$1" "$2"
+  fi
+}
+
+# Build a deterministic fixture tree. Sparse files via truncate, so sizes are
+# exact and creation is instant. Echoes the root.
+st_fixture() {
+  ST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cleanup-selftest.XXXXXX") || return 1
+  mkdir -p "$ST_ROOT/.cache/npm" "$ST_ROOT/.config/FakeApp/Cache" \
+           "$ST_ROOT/.config/FakeApp/Local Storage" \
+           "$ST_ROOT/.config/FakeApp/IndexedDB"
+  truncate -s 1M  "$ST_ROOT/.cache/npm/blob"
+  truncate -s 2M  "$ST_ROOT/.config/FakeApp/Cache/entry"
+  truncate -s 4M  "$ST_ROOT/.config/FakeApp/Local Storage/leveldb.ldb"
+  truncate -s 8M  "$ST_ROOT/.config/FakeApp/IndexedDB/store.db"
+  printf '%s' "$ST_ROOT"
+}
+
+st_cleanup() { [[ -n "$ST_ROOT" && -d "$ST_ROOT" ]] && rm -rf -- "$ST_ROOT"; ST_ROOT=""; }
+
+# sttest_cli re-invokes this script to check flag parsing. Those children must not
+# re-enter the CLI test themselves, or the suite forks without bound.
+st_run() {
+  printf '%s%s self-test %s\n' "$C_B" "$C_CYN" "$C_RESET"
+  local t
+  for t in $(declare -F | awk '{print $3}' | grep '^sttest_' | sort); do
+    [[ -n "${CLEANUP_ST_CHILD:-}" && "$t" == sttest_cli ]] && continue
+    printf '\n%s-- %s --%s\n' "$C_DIM" "${t#sttest_}" "$C_RESET"
+    "$t"
+    st_cleanup
+  done
+  printf '\n  %spassed %d%s  %sfailed %d%s\n' \
+    "$C_GRN" "$ST_PASS" "$C_RESET" "$C_RED" "$ST_FAIL" "$C_RESET"
+  [[ $ST_FAIL -eq 0 ]]
+}
+
+sttest_harness() {
+  st_assert "human() formats bytes"     "$(human 1048576)" "1.0MiB"
+  st_assert "human() handles zero"      "$(human 0)"       "0B"
+  local root; root=$(st_fixture)
+  st_assert "fixture root exists"       "$([[ -d "$root" ]] && echo yes)" "yes"
+  st_assert "fixture npm blob is 1M"    "$(path_bytes "$root/.cache/npm/blob")" "1048576"
+  st_assert "fixture protected dir made" \
+    "$([[ -d "$root/.config/FakeApp/Local Storage" ]] && echo yes)" "yes"
+}
 
 # ---------------------------------------------------------------------------------
 # core: report + (optionally) delete a path. Adds to TOTAL_BYTES when acted on.
@@ -180,6 +251,11 @@ confirm() { # confirm "question"  -> 0 yes / 1 no
 # preflight
 # ---------------------------------------------------------------------------------
 [[ $EUID -eq 0 ]] && { echo "${C_RED}Refusing to run as root.${C_RESET} Run as your normal user (system steps use sudo as needed)." >&2; exit 1; }
+
+if [[ $SELF_TEST -eq 1 ]]; then
+  st_run; exit $?
+fi
+
 HOME_FS=$(df -P "$HOME" | awk 'NR==2{print $1}')
 before_avail=$(df -P "$HOME" | awk 'NR==2{print $4}')
 
