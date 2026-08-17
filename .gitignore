@@ -1,3 +1,6 @@
 # local session/plugin state — not part of the tool
 .remember/
 .claude/
+
+# local design notes — kept on disk, not published
+docs/superpowers/
