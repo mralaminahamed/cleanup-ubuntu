@@ -644,6 +644,50 @@ register_sites_idle_units() {
 }
 
 # ---------------------------------------------------------------------------------
+# discovery: generic app caches
+#
+# Matches on directory NAME, not on any app-specific knowledge, so apps the
+# script has never heard of still get cleaned. PROTECTED_NAMES is the only thing
+# standing between this and real application state — treat it as security
+# critical and keep sttest_discovery_caches green.
+# ---------------------------------------------------------------------------------
+CACHE_NAMES=(
+  "Cache" "Code Cache" "GPUCache" "ShaderCache" "CachedData"
+  "DawnCache" "DawnGraphiteCache" "GrShaderCache" "Crashpad"
+  "Cache_Data" "component_crx_cache" "logs"
+)
+PROTECTED_NAMES=(
+  "Local Storage" "IndexedDB" "Session Storage" "databases"
+  "Service Worker" "Local State" "Preferences" "Cookies"
+  "Login Data" "Web Data" "History" "Bookmarks"
+)
+DISCOVER_ROOTS=("$HOME/.config" "$HOME/.local/share" "$HOME/.cache")
+
+is_cache_name() {
+  local n="$1" x
+  for x in "${PROTECTED_NAMES[@]}"; do [[ "$n" == "$x" ]] && return 1; done
+  for x in "${CACHE_NAMES[@]}";     do [[ "$n" == "$x" ]] && return 0; done
+  return 1
+}
+
+discover_app_caches() {
+  local r d name app id
+  for r in "${DISCOVER_ROOTS[@]}"; do
+    [[ -d "$r" ]] || continue
+    while IFS= read -r d; do
+      [[ -z "$d" ]] && continue
+      name=$(basename "$d")
+      is_cache_name "$name" || continue
+      app=$(basename "$(dirname "$d")")
+      id="disc-${app}-${name}"
+      id="${id// /-}"
+      [[ -n "${U_TIER[$id]:-}" ]] && continue
+      register_unit "$id" 2 1 "$app/$name" paths "$d"
+    done < <(find "$r" -mindepth 2 -maxdepth 2 -type d 2>/dev/null)
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -905,6 +949,49 @@ sttest_sites_idle_units() {
   for id in "${U_IDS[@]}"; do
     st_assert "sites-idle unit $id is lossy tier 4" "${U_TIER[$id]}/${U_REV[$id]}" "4/0"
   done
+}
+
+sttest_discovery_caches() {
+  # cache-semantic names are matched
+  st_assert "Cache matched"        "$(is_cache_name 'Cache' && echo y || echo n)"        "y"
+  st_assert "Code Cache matched"   "$(is_cache_name 'Code Cache' && echo y || echo n)"   "y"
+  st_assert "GPUCache matched"     "$(is_cache_name 'GPUCache' && echo y || echo n)"     "y"
+  st_assert "CachedData matched"   "$(is_cache_name 'CachedData' && echo y || echo n)"   "y"
+  st_assert "ShaderCache matched"  "$(is_cache_name 'ShaderCache' && echo y || echo n)"  "y"
+  st_assert "Crashpad matched"     "$(is_cache_name 'Crashpad' && echo y || echo n)"     "y"
+
+  # PROTECTED — these hold real application state and must never match
+  st_assert "Local Storage PROTECTED"  "$(is_cache_name 'Local Storage' && echo y || echo n)"  "n"
+  st_assert "IndexedDB PROTECTED"      "$(is_cache_name 'IndexedDB' && echo y || echo n)"      "n"
+  st_assert "Session Storage PROTECTED" "$(is_cache_name 'Session Storage' && echo y || echo n)" "n"
+  st_assert "databases PROTECTED"      "$(is_cache_name 'databases' && echo y || echo n)"      "n"
+  st_assert "Service Worker PROTECTED" "$(is_cache_name 'Service Worker' && echo y || echo n)" "n"
+  st_assert "Local State PROTECTED"    "$(is_cache_name 'Local State' && echo y || echo n)"    "n"
+  st_assert "Preferences PROTECTED"    "$(is_cache_name 'Preferences' && echo y || echo n)"    "n"
+  st_assert "Cookies PROTECTED"        "$(is_cache_name 'Cookies' && echo y || echo n)"        "n"
+  st_assert "Login Data PROTECTED"     "$(is_cache_name 'Login Data' && echo y || echo n)"     "n"
+  st_assert "unrelated name unmatched" "$(is_cache_name 'Extensions' && echo y || echo n)"     "n"
+
+  # end-to-end against the fixture
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  DISCOVER_ROOTS=("$root/.config" "$root/.local/share" "$root/.cache")
+  discover_app_caches
+
+  local found_cache=0 found_protected=0 id
+  for id in "${U_IDS[@]}"; do
+    [[ "${U_PAYLOAD[$id]}" == *"FakeApp/Cache" ]]           && found_cache=1
+    [[ "${U_PAYLOAD[$id]}" == *"Local Storage"* ]]          && found_protected=1
+    [[ "${U_PAYLOAD[$id]}" == *"IndexedDB"* ]]              && found_protected=1
+  done
+  st_assert "discovered FakeApp/Cache"          "$found_cache"     "1"
+  st_assert "NEVER discovered protected dirs"   "$found_protected" "0"
+
+  for id in "${U_IDS[@]}"; do
+    st_assert "discovered unit $id is tier 2" "${U_TIER[$id]}" "2"
+  done
+  DISCOVER_ROOTS=("$HOME/.config" "$HOME/.local/share" "$HOME/.cache")
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
