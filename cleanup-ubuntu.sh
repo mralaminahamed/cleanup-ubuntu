@@ -187,6 +187,59 @@ st_run() {
   [[ $ST_FAIL -eq 0 ]]
 }
 
+# ---------------------------------------------------------------------------------
+# filesystem survey
+# ---------------------------------------------------------------------------------
+mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
+fs_of()       { df -P "$1" 2>/dev/null | awk 'NR==2{print $1}'; }
+avail_bytes() { local k; k=$(df -P "$1" 2>/dev/null | awk 'NR==2{print $4}'); echo $(( ${k:-0} * 1024 )); }
+usepct()      { df -P "$1" 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5+0}'; }
+
+pressure_from_pct() {
+  local p=${1:-0}
+  if   (( p >= 95 )); then echo critical
+  elif (( p >= 85 )); then echo high
+  elif (( p >= 70 )); then echo normal
+  else                     echo relaxed
+  fi
+}
+pressure_of() { pressure_from_pct "$(usepct "$1")"; }
+
+# "12G" -> 12884901888. Integer + optional K/M/G/T only; decimals are rejected
+# because bash has no float arithmetic and a silently truncated target is worse
+# than an error.
+parse_size() {
+  local s="${1:-}" n unit
+  s=$(printf '%s' "$s" | tr '[:lower:]' '[:upper:]')
+  [[ "$s" =~ ^([0-9]+)([KMGT]?)B?$ ]] || return 1
+  n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+  case "$unit" in
+    '') echo "$n" ;;
+    K)  echo $(( n * 1024 )) ;;
+    M)  echo $(( n * 1024 * 1024 )) ;;
+    G)  echo $(( n * 1024 * 1024 * 1024 )) ;;
+    T)  echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
+  esac
+}
+
+# Print every real filesystem with its pressure. Skips pseudo/loop mounts so the
+# table shows only things a human could actually free space on.
+survey_mounts() {
+  section "Filesystems"
+  local src size used avail pct mp pr
+  while read -r src size used avail pct mp; do
+    [[ "$src" == Filesystem ]] && continue
+    case "$src" in /dev/loop*|tmpfs|devtmpfs|efivarfs|none) continue ;; esac
+    pct=${pct%\%}
+    pr=$(pressure_from_pct "$pct")
+    case "$pr" in
+      critical) printf '  %s%-28s %5s used %5s free  %3s%%  %s%s\n' "$C_RED" "$mp" "$used" "$avail" "$pct" "$pr" "$C_RESET" ;;
+      high)     printf '  %s%-28s %5s used %5s free  %3s%%  %s%s\n' "$C_YEL" "$mp" "$used" "$avail" "$pct" "$pr" "$C_RESET" ;;
+      *)        printf '  %-28s %5s used %5s free  %3s%%  %s\n' "$mp" "$used" "$avail" "$pct" "$pr" ;;
+    esac
+  done < <(df -PH 2>/dev/null)
+}
+
 sttest_harness() {
   st_assert "human() formats bytes"     "$(human 1048576)" "1.0MiB"
   st_assert "human() handles zero"      "$(human 0)"       "0B"
@@ -195,6 +248,34 @@ sttest_harness() {
   st_assert "fixture npm blob is 1M"    "$(path_bytes "$root/.cache/npm/blob")" "1048576"
   st_assert "fixture protected dir made" \
     "$([[ -d "$root/.config/FakeApp/Local Storage" ]] && echo yes)" "yes"
+}
+
+sttest_mounts() {
+  st_assert "parse_size plain bytes"  "$(parse_size 1024)"  "1024"
+  st_assert "parse_size K"            "$(parse_size 4K)"    "4096"
+  st_assert "parse_size M"            "$(parse_size 2M)"    "2097152"
+  st_assert "parse_size G"            "$(parse_size 12G)"   "12884901888"
+  st_assert "parse_size lowercase g"  "$(parse_size 12g)"   "12884901888"
+  parse_size "12.5G" >/dev/null 2>&1
+  st_assert "parse_size rejects decimal" "$?" "1"
+  parse_size "banana" >/dev/null 2>&1
+  st_assert "parse_size rejects garbage" "$?" "1"
+
+  st_assert "mount_of / is /"        "$(mount_of /)" "/"
+  st_assert_ne "avail_bytes / nonzero" "$(avail_bytes /)" "0"
+
+  local p; p=$(usepct /)
+  st_assert "usepct in range" "$([[ "$p" -ge 0 && "$p" -le 100 ]] && echo yes)" "yes"
+
+  # pressure thresholds are pure arithmetic — test the classifier directly
+  st_assert "pressure 50 relaxed"  "$(pressure_from_pct 50)"  "relaxed"
+  st_assert "pressure 69 relaxed"  "$(pressure_from_pct 69)"  "relaxed"
+  st_assert "pressure 70 normal"   "$(pressure_from_pct 70)"  "normal"
+  st_assert "pressure 84 normal"   "$(pressure_from_pct 84)"  "normal"
+  st_assert "pressure 85 high"     "$(pressure_from_pct 85)"  "high"
+  st_assert "pressure 94 high"     "$(pressure_from_pct 94)"  "high"
+  st_assert "pressure 95 critical" "$(pressure_from_pct 95)"  "critical"
+  st_assert "pressure 100 critical" "$(pressure_from_pct 100)" "critical"
 }
 
 # ---------------------------------------------------------------------------------
