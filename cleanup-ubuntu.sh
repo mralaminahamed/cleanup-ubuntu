@@ -188,6 +188,72 @@ st_run() {
 }
 
 # ---------------------------------------------------------------------------------
+# unit registry
+#
+# A "unit" is one cleanup step. Splitting probe (measure) from run (delete) is
+# what lets the planner rank by size, stop early once a target is met, and print
+# an honest dry-run.
+# ---------------------------------------------------------------------------------
+U_IDS=()
+declare -A U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
+
+# register_unit <id> <tier> <reversible> <label> <kind> <payload> [flag]
+#   kind=paths  payload = newline-delimited paths to delete
+#   kind=cmd    payload = shell command run verbatim (native cache cleaners)
+register_unit() {
+  local id=$1
+  U_IDS+=("$id")
+  U_TIER[$id]=$2
+  U_REV[$id]=$3
+  U_LABEL[$id]=$4
+  U_KIND[$id]=$5
+  U_PAYLOAD[$id]=$6
+  U_FLAG[$id]=${7:-}
+  U_BYTES[$id]=0
+  U_LOCKED[$id]=""
+  U_MOUNT[$id]=""
+}
+
+unit_paths() { printf '%s\n' "${U_PAYLOAD[$1]}"; }
+
+# Measure only. Nothing here may mutate the filesystem.
+probe_unit() {
+  local id=$1 total=0 b p
+  local -a plist=()
+  if [[ "${U_KIND[$id]}" == cmd ]]; then
+    U_BYTES[$id]=0
+    U_MOUNT[$id]=$(mount_of "$HOME")
+    return 0
+  fi
+  readarray -t plist < <(unit_paths "$id")
+  for p in "${plist[@]}"; do
+    [[ -z "$p" || ! -e "$p" ]] && continue
+    [[ -z "${U_MOUNT[$id]}" ]] && U_MOUNT[$id]=$(mount_of "$p")
+    b=$(path_bytes "$p")
+    total=$(( total + b ))
+  done
+  [[ -z "${U_MOUNT[$id]}" ]] && U_MOUNT[$id]=$(mount_of "$HOME")
+  U_BYTES[$id]=$total
+}
+
+# Delete. Echoes bytes freed. Assumes probe_unit already ran.
+run_unit() {
+  local id=$1 p
+  local -a plist=()
+  if [[ "${U_KIND[$id]}" == cmd ]]; then
+    eval "${U_PAYLOAD[$id]}" >/dev/null 2>&1
+    echo 0; return 0
+  fi
+  readarray -t plist < <(unit_paths "$id")
+  for p in "${plist[@]}"; do
+    [[ -z "$p" || ! -e "$p" ]] && continue
+    chmod -R u+w "$p" 2>/dev/null
+    rm -rf -- "$p" 2>/dev/null
+  done
+  echo "${U_BYTES[$id]}"
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -276,6 +342,53 @@ sttest_mounts() {
   st_assert "pressure 94 high"     "$(pressure_from_pct 94)"  "high"
   st_assert "pressure 95 critical" "$(pressure_from_pct 95)"  "critical"
   st_assert "pressure 100 critical" "$(pressure_from_pct 100)" "critical"
+}
+
+# Reset the registry to empty. Every registry-touching test starts here so the
+# tests cannot leak units into each other.
+st_reset_registry() {
+  U_IDS=(); unset U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
+  declare -gA U_TIER U_REV U_LABEL U_KIND U_PAYLOAD U_FLAG U_MOUNT U_BYTES U_LOCKED
+}
+
+sttest_registry() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  register_unit "fake-cache" 2 1 "fake app cache" paths \
+    "$root/.config/FakeApp/Cache" "--fake"
+
+  st_assert "unit registered"     "${U_IDS[0]}"          "fake-cache"
+  st_assert "tier stored"         "${U_TIER[fake-cache]}" "2"
+  st_assert "reversible stored"   "${U_REV[fake-cache]}"  "1"
+  st_assert "flag stored"         "${U_FLAG[fake-cache]}" "--fake"
+
+  # probe must measure without deleting
+  local before after
+  before=$(path_bytes "$root/.config/FakeApp/Cache")
+  probe_unit "fake-cache"
+  after=$(path_bytes "$root/.config/FakeApp/Cache")
+  st_assert "probe reports size"     "${U_BYTES[fake-cache]}" "2097152"
+  st_assert "PROBE DELETES NOTHING"  "$after"                 "$before"
+  st_assert "probe resolved mount"   "$([[ -n "${U_MOUNT[fake-cache]}" ]] && echo yes)" "yes"
+
+  # a path with a space must survive round-tripping
+  register_unit "spacey" 2 1 "spacey" paths "$root/.config/FakeApp/Local Storage"
+  probe_unit "spacey"
+  st_assert "space-in-path measured" "${U_BYTES[spacey]}" "4194304"
+
+  # run actually deletes and reports
+  local freed; freed=$(run_unit "fake-cache")
+  st_assert "run reports freed"   "$freed" "2097152"
+  st_assert "run deleted the dir" "$([[ -e "$root/.config/FakeApp/Cache" ]] && echo yes || echo no)" "no"
+  st_assert "run left siblings"   "$([[ -e "$root/.config/FakeApp/Local Storage" ]] && echo yes)" "yes"
+
+  # multi-path unit sums correctly
+  register_unit "multi" 1 1 "multi" paths \
+    "$root/.cache/npm/blob
+$root/.config/FakeApp/IndexedDB"
+  probe_unit "multi"
+  st_assert "multi-path sums" "${U_BYTES[multi]}" "9437184"
 }
 
 # ---------------------------------------------------------------------------------
