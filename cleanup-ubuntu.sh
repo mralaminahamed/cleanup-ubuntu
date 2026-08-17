@@ -809,6 +809,54 @@ select_units() {
 }
 
 # ---------------------------------------------------------------------------------
+# executor
+# ---------------------------------------------------------------------------------
+STOPPED_EARLY=0
+UNRUN=()
+DECLINED=()
+
+execute_plan() {
+  STOPPED_EARLY=0; UNRUN=(); DECLINED=()
+  local id freed i=0
+
+  for id in "${SELECTED[@]}"; do
+    i=$((i + 1))
+    if [[ $APPLY -eq 1 ]] && target_met; then
+      STOPPED_EARLY=1
+      UNRUN=("${SELECTED[@]:$((i - 1))}")
+      break
+    fi
+
+    if [[ ${U_BYTES[$id]} -eq 0 && "${U_KIND[$id]}" != cmd ]]; then continue; fi
+
+    # --allow-lossy opens the gate; it does not walk through it unattended.
+    # Anything that cannot be regenerated is confirmed one unit at a time.
+    if [[ $APPLY -eq 1 && "${U_REV[$id]}" != 1 ]]; then
+      if ! confirm "delete ${U_LABEL[$id]} ($(human "${U_BYTES[$id]}")) — this cannot be undone?"; then
+        DECLINED+=("$id")
+        printf '  %sskip%s  %s — declined\n' "$C_YEL" "$C_RESET" "${U_LABEL[$id]}"
+        continue
+      fi
+    fi
+
+    if [[ $APPLY -eq 1 ]]; then
+      freed=$(run_unit "$id")
+      TOTAL_BYTES=$(( TOTAL_BYTES + freed ))
+      printf '  %s✓%s %-38s %s%s%s freed\n' "$C_GRN" "$C_RESET" \
+        "${U_LABEL[$id]}" "$C_GRN" "$(human "$freed")" "$C_RESET"
+    else
+      TOTAL_BYTES=$(( TOTAL_BYTES + ${U_BYTES[$id]} ))
+      if [[ "${U_KIND[$id]}" == cmd ]]; then
+        printf '  %s•%s %-38s would run: %s\n' "$C_CYN" "$C_RESET" "${U_LABEL[$id]}" "${U_PAYLOAD[$id]}"
+      else
+        printf '  %s•%s %-38s %s%s%s reclaimable\n' "$C_CYN" "$C_RESET" \
+          "${U_LABEL[$id]}" "$C_B" "$(human "${U_BYTES[$id]}")" "$C_RESET"
+      fi
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -1226,6 +1274,61 @@ sttest_planner() {
   resolve_target
   st_assert "resolve_target honours :path" "$TARGET_PATH" "$root"
   FREE_ARG=""; TARGET_BYTES=""; TARGET_PATH="$HOME"
+}
+
+sttest_executor() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  register_unit e1 1 1 "e1" paths "$root/.cache/npm/blob"
+  register_unit e2 2 1 "e2" paths "$root/.config/FakeApp/Cache"
+  local id; for id in "${U_IDS[@]}"; do probe_unit "$id"; done
+  SELECTED=(e1 e2)
+
+  # dry-run must delete nothing
+  APPLY=0 ASSUME_YES=1 TARGET_BYTES="" TOTAL_BYTES=0
+  execute_plan >/dev/null
+  st_assert "dry-run deletes nothing (e1)" "$([[ -e "$root/.cache/npm/blob" ]] && echo yes)" "yes"
+  st_assert "dry-run deletes nothing (e2)" "$([[ -e "$root/.config/FakeApp/Cache" ]] && echo yes)" "yes"
+  st_assert "dry-run still totals bytes"   "$TOTAL_BYTES" "3145728"
+
+  # apply with an already-satisfied target must run nothing at all
+  APPLY=1 TARGET_BYTES=1 TARGET_PATH="$root" TOTAL_BYTES=0
+  execute_plan >/dev/null
+  st_assert "target already met - nothing ran" "$TOTAL_BYTES" "0"
+  st_assert "early stop recorded"              "$STOPPED_EARLY" "1"
+  st_assert "files survive early stop"         "$([[ -e "$root/.cache/npm/blob" ]] && echo yes)" "yes"
+
+  # apply with an unreachable target must run everything
+  APPLY=1 TARGET_BYTES=$(( 1024 ** 5 )) TOTAL_BYTES=0
+  execute_plan >/dev/null
+  st_assert "unreachable target runs all"  "$TOTAL_BYTES" "3145728"
+  st_assert "e1 deleted" "$([[ -e "$root/.cache/npm/blob" ]] && echo yes || echo no)" "no"
+  st_assert "e2 deleted" "$([[ -e "$root/.config/FakeApp/Cache" ]] && echo yes || echo no)" "no"
+  st_assert "protected fixture dir untouched" \
+    "$([[ -e "$root/.config/FakeApp/Local Storage" ]] && echo yes)" "yes"
+
+  # a lossy unit must be confirmed before it runs, even once --allow-lossy
+  # opened the gate. Declining at the prompt leaves the data alone.
+  st_cleanup; root=$(st_fixture)
+  st_reset_registry
+  register_unit lossy1 4 0 "lossy1" paths "$root/.config/FakeApp/Local Storage"
+  probe_unit lossy1
+  SELECTED=(lossy1)
+  APPLY=1 ASSUME_YES=0 TARGET_BYTES="" TARGET_PATH="$root" TOTAL_BYTES=0
+  execute_plan </dev/null >/dev/null
+  st_assert "declined lossy unit is NOT deleted" \
+    "$([[ -e "$root/.config/FakeApp/Local Storage" ]] && echo yes || echo no)" "yes"
+  st_assert "declined lossy unit freed nothing" "$TOTAL_BYTES" "0"
+
+  # --yes answers the prompt
+  APPLY=1 ASSUME_YES=1 TOTAL_BYTES=0
+  execute_plan >/dev/null
+  st_assert "--yes runs the lossy unit" \
+    "$([[ -e "$root/.config/FakeApp/Local Storage" ]] && echo yes || echo no)" "no"
+  st_assert "--yes lossy unit freed bytes" "$TOTAL_BYTES" "4194304"
+
+  APPLY=0 ASSUME_YES=0 TARGET_BYTES="" TARGET_PATH="$HOME" SELECTED=()
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
