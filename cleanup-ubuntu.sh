@@ -254,6 +254,120 @@ run_unit() {
 }
 
 # ---------------------------------------------------------------------------------
+# lock detection — which running app owns which cache root
+#
+# Three parallel arrays, index-aligned. The regex is matched against the full
+# process cmdline. android-studio is listed separately from the jetbrains regex
+# because its launcher path contains none of the JetBrains product names, which
+# previously let the script delete a live Studio's indexes.
+# ---------------------------------------------------------------------------------
+LOCK_RX=(
+  'android-studio|/studio\.sh|/studio64|bin/studio( |$)'
+  'jetbrains|/idea|pycharm|phpstorm|webstorm|goland|clion|rider|rubymine|datagrip'
+  '/zed( |$)|/zed-editor'
+  '/code( |$)|/code-insiders|/cursor( |$)'
+  '/chrome( |$)|/chromium( |$)'
+  '/brave( |$)|brave-browser'
+  '/firefox( |$)'
+  '/slack( |$)'
+  '/discord( |$)|/Discord( |$)'
+  '/postman( |$)|/Postman( |$)'
+  '/goose( |$)'
+  'figma-linux|/figma( |$)'
+)
+LOCK_NAME=(
+  "android-studio" "jetbrains-ide" "zed" "vscode" "chrome" "brave"
+  "firefox" "slack" "discord" "postman" "goose" "figma"
+)
+LOCK_ROOTS=(
+  "$HOME/.cache/JetBrains
+$HOME/.config/JetBrains
+$HOME/.local/share/JetBrains"
+  "$HOME/.cache/JetBrains
+$HOME/.config/JetBrains
+$HOME/.local/share/JetBrains"
+  "$HOME/.local/share/zed
+$HOME/.cache/zed"
+  "$HOME/.config/Code
+$HOME/.config/Cursor
+$HOME/.cache/Code"
+  "$HOME/.cache/google-chrome
+$HOME/.config/google-chrome
+$HOME/.cache/Google"
+  "$HOME/.cache/BraveSoftware
+$HOME/.config/BraveSoftware"
+  "$HOME/.cache/mozilla
+$HOME/.mozilla"
+  "$HOME/.config/Slack"
+  "$HOME/.config/discord"
+  "$HOME/.config/Postman"
+  "$HOME/.config/goose"
+  "$HOME/.config/figma-linux"
+)
+
+# Overridable by self-test so lock logic can be exercised without real processes.
+ST_FAKE_PROCS=""
+
+running_procs() {
+  if [[ -n "$ST_FAKE_PROCS" ]]; then printf '%s\n' "$ST_FAKE_PROCS"; return 0; fi
+  ps -eo pid=,args= 2>/dev/null |
+    grep -vE 'cleanup-ubuntu|[[:space:]]grep[[:space:]]' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]\{1,\}/\t/'
+}
+
+# True if a cmdline matches any lock regex. Exposed for self-test.
+lock_rx_matches() {
+  local cmd="$1" rx
+  [[ "$cmd" == *cleanup-ubuntu* ]] && return 1
+  for rx in "${LOCK_RX[@]}"; do
+    if printf '%s' "$cmd" | grep -qE "$rx"; then return 0; fi
+  done
+  return 1
+}
+
+# Fill U_LOCKED[id] with "AppName:pid" for every unit whose paths sit under a
+# root owned by a running app.
+apply_locks() {
+  local -a procs=()
+  readarray -t procs < <(running_procs)
+  (( ${#procs[@]} )) || return 0
+
+  local id i rx pid cmd root p entry
+  local -a roots=() plist=()
+
+  for i in "${!LOCK_RX[@]}"; do
+    rx="${LOCK_RX[$i]}"
+    pid=""
+    for entry in "${procs[@]}"; do
+      [[ -z "$entry" ]] && continue
+      cmd="${entry#*$'\t'}"
+      [[ "$cmd" == *cleanup-ubuntu* ]] && continue
+      if printf '%s' "$cmd" | grep -qE "$rx"; then pid="${entry%%$'\t'*}"; break; fi
+    done
+    [[ -z "$pid" ]] && continue
+
+    readarray -t roots <<< "${LOCK_ROOTS[$i]}"
+    for id in "${U_IDS[@]}"; do
+      [[ -n "${U_LOCKED[$id]}" ]] && continue
+      [[ "${U_KIND[$id]}" == cmd ]] && continue
+      readarray -t plist < <(unit_paths "$id")
+      for p in "${plist[@]}"; do
+        [[ -z "$p" ]] && continue
+        for root in "${roots[@]}"; do
+          [[ -z "$root" ]] && continue
+          if [[ "$p" == "$root" || "$p" == "$root"/* ]]; then
+            U_LOCKED[$id]="${LOCK_NAME[$i]}:$pid"
+            # break the root and path loops only — the remaining units still
+            # need checking, or a second cache under the same app stays unlocked
+            break 2
+          fi
+        done
+      done
+    done
+  done
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -389,6 +503,43 @@ sttest_registry() {
 $root/.config/FakeApp/IndexedDB"
   probe_unit "multi"
   st_assert "multi-path sums" "${U_BYTES[multi]}" "9437184"
+}
+
+sttest_locks() {
+  # the regex table must recognise every launcher form Android Studio uses,
+  # which is exactly the bug this fixes
+  st_assert "android-studio bin path matches" \
+    "$(lock_rx_matches '/usr/local/android-studio/bin/studio' && echo yes || echo no)" "yes"
+  st_assert "studio.sh matches" \
+    "$(lock_rx_matches '/opt/android-studio/bin/studio.sh' && echo yes || echo no)" "yes"
+  st_assert "jetbrains idea still matches" \
+    "$(lock_rx_matches '/opt/idea/bin/idea.sh' && echo yes || echo no)" "yes"
+  st_assert "zed matches" \
+    "$(lock_rx_matches '/usr/bin/zed' && echo yes || echo no)" "yes"
+  st_assert "unrelated proc does not match" \
+    "$(lock_rx_matches '/usr/bin/htop' && echo yes || echo no)" "no"
+  st_assert "the cleanup script itself never matches" \
+    "$(lock_rx_matches 'bash cleanup-ubuntu.sh --apply' && echo yes || echo no)" "no"
+
+  # a unit under a locked root must be marked, and one outside must not
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  register_unit "locked-one"   3 1 "locked"   paths "$root/.config/FakeApp/Cache"
+  register_unit "locked-two"   3 1 "locked2"  paths "$root/.config/FakeApp/IndexedDB"
+  register_unit "unlocked-one" 1 1 "unlocked" paths "$root/.cache/npm"
+
+  # inject a fake running app owning the FakeApp root
+  local -a saved_rx=("${LOCK_RX[@]}") saved_roots=("${LOCK_ROOTS[@]}") saved_name=("${LOCK_NAME[@]}")
+  LOCK_RX=("fakeapp") ; LOCK_ROOTS=("$root/.config/FakeApp") ; LOCK_NAME=("FakeApp")
+  ST_FAKE_PROCS=$'4242\t/usr/bin/fakeapp --no-sandbox'
+  apply_locks
+
+  st_assert "unit under locked root is marked" "${U_LOCKED[locked-one]}"   "FakeApp:4242"
+  st_assert "EVERY unit under a locked root is marked" "${U_LOCKED[locked-two]}" "FakeApp:4242"
+  st_assert "unit outside locked root is free" "${U_LOCKED[unlocked-one]}" ""
+  ST_FAKE_PROCS=""
+  LOCK_RX=("${saved_rx[@]}"); LOCK_ROOTS=("${saved_roots[@]}"); LOCK_NAME=("${saved_name[@]}")
 }
 
 # ---------------------------------------------------------------------------------
