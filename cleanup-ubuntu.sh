@@ -7,10 +7,13 @@
 #
 # HIGHLIGHTS
 #   * DRY-RUN by default — shows what WOULD be freed. Use --apply to actually delete.
+#   * Goal-driven — "--free 12G" cleans until that much is free, then stops.
 #   * Process-aware — skips caches of apps that are currently running (IDEs,
 #     browsers, Docker) so it never corrupts a live session.
 #   * Tool-aware — auto-detects installed package managers and uses their native
 #     "cache clean" commands where possible (safer than blind rm).
+#   * Filesystem-aware — targets the partition that is actually full, and drops
+#     steps that would free space somewhere else.
 #   * Protects real data — Downloads, source trees, ollama models, MEGA/Dropbox
 #     syncs, and Docker *named* volumes are never touched.
 #
@@ -18,6 +21,30 @@
 #   ./cleanup-ubuntu.sh                 # dry-run, show reclaimable space
 #   ./cleanup-ubuntu.sh --apply         # actually clean (asks before big/risky steps)
 #   ./cleanup-ubuntu.sh --apply --yes   # non-interactive
+#   ./cleanup-ubuntu.sh --apply --free 12G   # clean until 12G is free, then stop
+#
+# ADAPTIVE
+#   --free SIZE         clean until SIZE is free on the fs holding $HOME.
+#                       Use "--free SIZE:/path" to target another mount.
+#                       Stops as soon as the target is met.
+#   --auto              pressure-driven: reads disk usage and picks tiers
+#                       itself (aims for <85% on the fullest mount).
+#                       Implies --discover.
+#   --tier N            hard cap: never select a unit above tier N.
+#   --allow-lossy       permit tiers 4-5 (session history, dep dirs, docker
+#                       volumes). Auto-escalation NEVER crosses this line
+#                       on its own, and each such step is still confirmed
+#                       one at a time unless --yes is given.
+#   --discover          scan for app caches with no hardcoded rule, and
+#                       report large directories nothing covers.
+#   --json              machine-readable probe output.
+#   --self-test         run the built-in test suite and exit.
+#
+# TIERS
+#   0-3 regenerable — caches, indexes, superseded versions. Auto-escalation
+#       may run these. Worst case you wait for a rebuild.
+#   4-5 lossy — claude --resume history, node_modules/vendor, docker
+#       volumes, VM bundles. Never run automatically; needs --allow-lossy.
 #
 # OPT-IN EXTRAS (all off by default)
 #   --docker            prune unused Docker images/containers/build-cache/networks
@@ -75,30 +102,39 @@ SITES_IDLE_DAYS=0
 SITES_ROOT="$HOME/Sites"
 CLAUDE_ROOT="$HOME/.claude"
 TMP_SWEEP_ROOT="/tmp"
+FREE_ARG="" AUTO_MODE=0 TIER_CAP=5 ALLOW_LOSSY=0 DO_DISCOVER=0 JSON_OUT=0
+FORCED_FLAGS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply)          APPLY=1 ;;
     -y|--yes)         ASSUME_YES=1 ;;
-    --docker)         DO_DOCKER=1 ;;
-    --docker-all)     DO_DOCKER=1; DOCKER_ALL=1 ;;
-    --docker-volumes) DO_DOCKER=1; DOCKER_VOLUMES=1 ;;
-    --jetbrains)      DO_JETBRAINS=1 ;;
-    --browsers)       DO_BROWSERS=1 ;;
-    --playwright)     DO_PLAYWRIGHT=1 ;;
-    --deps|--node-modules) DEPS_DAYS="${2:-30}"; shift ;;
-    --sites-idle)     SITES_IDLE_DAYS="${2:-30}"; shift
+    --docker)         DO_DOCKER=1; FORCED_FLAGS+=" --docker" ;;
+    --docker-all)     DO_DOCKER=1; DOCKER_ALL=1; FORCED_FLAGS+=" --docker" ;;
+    --docker-volumes) DO_DOCKER=1; DOCKER_VOLUMES=1; FORCED_FLAGS+=" --docker --docker-volumes" ;;
+    --jetbrains)      DO_JETBRAINS=1; FORCED_FLAGS+=" --jetbrains" ;;
+    --browsers)       DO_BROWSERS=1; FORCED_FLAGS+=" --browsers" ;;
+    --playwright)     DO_PLAYWRIGHT=1; FORCED_FLAGS+=" --playwright" ;;
+    --deps|--node-modules) DEPS_DAYS="${2:-30}"; FORCED_FLAGS+=" --deps"; shift ;;
+    --sites-idle)     SITES_IDLE_DAYS="${2:-30}"; FORCED_FLAGS+=" --sites-idle"; shift
                       # optional DIR arg: consume it only if it's an existing dir
                       if [[ -n "${2:-}" && -d "${2}" ]]; then SITES_ROOT="$2"; shift; fi ;;
-    --system)         DO_SYSTEM=1 ;;
-    --claude-vm)      DO_CLAUDE_VM=1 ;;
-    --claude-jobs)    DO_CLAUDE_JOBS=1
+    --system)         DO_SYSTEM=1; FORCED_FLAGS+=" --system" ;;
+    --claude-vm)      DO_CLAUDE_VM=1; FORCED_FLAGS+=" --claude-vm" ;;
+    --claude-jobs)    DO_CLAUDE_JOBS=1; FORCED_FLAGS+=" --claude-jobs"
                       # optional DAYS arg: consume it only if it really is a number
                       if [[ "${2:-}" =~ ^[0-9]+$ ]]; then CLAUDE_JOBS_DAYS="$2"; shift; fi ;;
-    --claude-plugins) DO_CLAUDE_PLUGINS=1 ;;
-    --claude-history) CLAUDE_HISTORY_DAYS="${2:-30}"
+    --claude-plugins) DO_CLAUDE_PLUGINS=1; FORCED_FLAGS+=" --claude-plugins" ;;
+    --claude-history) CLAUDE_HISTORY_DAYS="${2:-30}"; FORCED_FLAGS+=" --claude-history"
                       [[ "${2:-}" =~ ^[0-9]+$ ]] && shift ;;
-    --claude-all)     DO_CLAUDE_JOBS=1; DO_CLAUDE_PLUGINS=1 ;;
+    --claude-all)     DO_CLAUDE_JOBS=1; DO_CLAUDE_PLUGINS=1
+                      FORCED_FLAGS+=" --claude-jobs --claude-plugins" ;;
+    --free)           FREE_ARG="${2:-}"; shift ;;
+    --auto)           AUTO_MODE=1; DO_DISCOVER=1 ;;
+    --tier)           TIER_CAP="${2:-5}"; shift ;;
+    --allow-lossy)    ALLOW_LOSSY=1 ;;
+    --discover)       DO_DISCOVER=1 ;;
+    --json)           JSON_OUT=1 ;;
     --self-test)      SELF_TEST=1 ;;
     -h|--help)        grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1  (try --help)" >&2; exit 2 ;;
@@ -896,8 +932,10 @@ report_heavyweights() {
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
     b="${row%%$'\t'*}"; p="${row#*$'\t'}"; cls="${p##*$'\t'}"; p="${p%%$'\t'*}"
+    # \~ , not ~ : an unescaped tilde in the replacement is tilde-expanded back
+    # to $HOME, which makes the whole substitution a no-op
     printf '  %s%8s%s  %-46s %s%s%s\n' "$C_B" "$(human "$b")" "$C_RESET" \
-      "${p/#$HOME/~}" "$C_DIM" "$cls" "$C_RESET"
+      "${p/#$HOME/\~}" "$C_DIM" "$cls" "$C_RESET"
   done < <(printf '%s\n' "${HEAVY_LIST[@]}" | sort -rn)
   printf '\n  %snothing above was deleted — review these yourself%s\n' "$C_DIM" "$C_RESET"
   return 0
@@ -1448,6 +1486,12 @@ sttest_reporting() {
   st_assert "heavyweight report shows path"  "$(printf '%s' "$out" | grep -c 'Downloads')" "1"
   st_assert "heavyweight report is advisory" "$(printf '%s' "$out" | grep -ci 'nothing.*deleted')" "1"
 
+  # paths under $HOME abbreviate to ~ — an unescaped tilde in the replacement
+  # expands back to $HOME and silently disables this
+  HEAVY_LIST=("$(printf '5368709120\t%s/Downloads\tdata' "$HOME")")
+  out=$(report_heavyweights)
+  st_assert "home paths abbreviate to ~" "$(printf '%s' "$out" | grep -c '~/Downloads')" "1"
+
   # JSON must be parseable and must not claim to have deleted anything in dry-run
   APPLY=0 TOTAL_BYTES=2097152 TARGET_BYTES="" STOPPED_EARLY=0
   out=$(emit_json)
@@ -1466,6 +1510,44 @@ sttest_reporting() {
   SKIPPED_LOSSY=(); HEAVY_LIST=(); TOTAL_BYTES=0
 }
 
+# Re-execs this script, so it must never run in a child (st_run skips it when
+# CLEANUP_ST_CHILD is set) or the suite would fork without bound.
+sttest_cli() {
+  local f
+  for f in --apply --docker --docker-all --docker-volumes --jetbrains --browsers \
+           --playwright --claude-vm --claude-jobs --claude-plugins --claude-all \
+           --auto --allow-lossy --discover --json; do
+    CLEANUP_ST_CHILD=1 bash "$0" "$f" --self-test >/dev/null 2>&1
+    st_assert "flag $f parses" "$?" "0"
+  done
+  for f in "--deps 30" "--sites-idle 30" "--claude-history 30" "--free 1G" "--tier 2"; do
+    # shellcheck disable=SC2086
+    CLEANUP_ST_CHILD=1 bash "$0" $f --self-test >/dev/null 2>&1
+    st_assert "flag $f parses" "$?" "0"
+  done
+
+  CLEANUP_ST_CHILD=1 bash "$0" --nonsense-flag >/dev/null 2>&1
+  st_assert "unknown flag still exits 2" "$?" "2"
+
+  CLEANUP_ST_CHILD=1 bash "$0" --free banana >/dev/null 2>&1
+  st_assert "bad --free size exits 2" "$?" "2"
+
+  # help must document every new flag
+  local h; h=$(bash "$0" --help 2>&1)
+  for f in --free --auto --tier --allow-lossy --discover --json --self-test; do
+    st_assert_ne "help documents $f" "$(printf '%s' "$h" | grep -c -- "$f")" "0"
+  done
+  # and must not have lost the legacy ones
+  for f in --apply --docker --jetbrains --browsers --playwright --deps --sites-idle \
+           --system --claude-vm --claude-jobs --claude-plugins --claude-history --claude-all; do
+    st_assert_ne "help still documents $f" "$(printf '%s' "$h" | grep -c -- "$f")" "0"
+  done
+
+  # a dry run must be exactly that: no target, nothing deleted, exit 0
+  CLEANUP_ST_CHILD=1 bash "$0" >/dev/null 2>&1
+  st_assert "bare dry-run exits 0" "$?" "0"
+}
+
 confirm() { # confirm "question"  -> 0 yes / 1 no
   [[ $ASSUME_YES -eq 1 ]] && return 0
   [[ $APPLY -eq 0 ]] && return 0   # dry-run always "proceeds" (nothing deleted)
@@ -1482,29 +1564,52 @@ if [[ $SELF_TEST -eq 1 ]]; then
   st_run; exit $?
 fi
 
-HOME_FS=$(df -P "$HOME" | awk 'NR==2{print $1}')
-before_avail=$(df -P "$HOME" | awk 'NR==2{print $4}')
-
-printf '%s%s cleanup-ubuntu %s  user=%s  host=%s\n' "$C_B" "$C_CYN" "$C_RESET" "$USER" "$(hostname)"
-if [[ $APPLY -eq 0 ]]; then
-  printf '%sDRY-RUN%s — nothing will be deleted. Re-run with %s--apply%s to clean.\n' "$C_YEL" "$C_RESET" "$C_B" "$C_RESET"
-else
-  printf '%sAPPLY MODE%s — caches will be deleted.\n' "$C_RED" "$C_RESET"
-fi
-df -h "$HOME" | awk 'NR==1||NR==2'
 
 # ---------------------------------------------------------------------------------
-# summary
+# main: survey -> register -> probe -> lock -> select -> execute -> report
 # ---------------------------------------------------------------------------------
-after_avail=$(df -P "$HOME" | awk 'NR==2{print $4}')
-delta_kb=$(( after_avail - before_avail ))
-section "Summary"
-if [[ $APPLY -eq 1 ]]; then
-  printf '  %sFreed this run: %s%s\n' "$C_GRN$C_B" "$(human $((TOTAL_BYTES)))" "$C_RESET"
-  printf '  Disk free on %s: %s → %s\n' "$HOME_FS" "$(human $((before_avail*1024)))" "$(human $((after_avail*1024)))"
-  [[ $delta_kb -gt 0 ]] && printf '  %s(+%s available)%s\n' "$C_DIM" "$(human $((delta_kb*1024)))" "$C_RESET"
-else
-  printf '  %sReclaimable (dry-run): %s%s\n' "$C_CYN$C_B" "$(human $((TOTAL_BYTES)))" "$C_RESET"
-  printf '  Re-run with %s--apply%s to reclaim it.\n' "$C_B" "$C_RESET"
-fi
-printf '  %sProtected & never touched: source trees, Downloads, ~/.ollama models, MEGA/Dropbox,\n  Docker named volumes, ~/.claude memory/settings, and any running Claude job.%s\n' "$C_DIM" "$C_RESET"
+main() {
+  register_all_units
+  [[ $DO_DISCOVER -eq 1 ]] && discover_app_caches
+
+  local id
+  for id in "${U_IDS[@]}"; do probe_unit "$id"; done
+  apply_locks
+  [[ $DO_DISCOVER -eq 1 ]] && discover_heavyweights
+
+  resolve_target
+  select_units
+
+  if [[ $JSON_OUT -eq 1 ]]; then
+    TOTAL_BYTES=0
+    for id in "${SELECTED[@]}"; do TOTAL_BYTES=$(( TOTAL_BYTES + ${U_BYTES[$id]} )); done
+    emit_json
+    return 0
+  fi
+
+  printf '%s%s cleanup-ubuntu %s  user=%s  host=%s\n' "$C_B" "$C_CYN" "$C_RESET" "$USER" "$(hostname)"
+  if [[ $APPLY -eq 0 ]]; then
+    printf '%sDRY-RUN%s — nothing will be deleted. Re-run with %s--apply%s to clean.\n' \
+      "$C_YEL" "$C_RESET" "$C_B" "$C_RESET"
+  else
+    printf '%sAPPLY MODE%s — caches will be deleted.\n' "$C_RED" "$C_RESET"
+  fi
+
+  survey_mounts
+  if [[ -n "$TARGET_BYTES" ]]; then
+    printf '\n  target: %s free on %s (currently %s)\n' \
+      "$(human "$TARGET_BYTES")" "$TARGET_MOUNT" "$(human "$(avail_bytes "$TARGET_PATH")")"
+  fi
+
+  section "Cleanup"
+  TOTAL_BYTES=0
+  execute_plan
+
+  report_locked
+  report_lossy_withheld
+  [[ $DO_DISCOVER -eq 1 ]] && report_heavyweights
+  report_summary
+  return 0
+}
+
+main
