@@ -857,6 +857,99 @@ execute_plan() {
 }
 
 # ---------------------------------------------------------------------------------
+# reporting
+# ---------------------------------------------------------------------------------
+report_locked() {
+  local id any=0 total=0 app pid
+  for id in "${U_IDS[@]}"; do
+    [[ -z "${U_LOCKED[$id]}" ]] && continue
+    (( ${U_BYTES[$id]} > 0 )) || continue
+    if (( any == 0 )); then section "Locked by running apps"; any=1; fi
+    app="${U_LOCKED[$id]%%:*}"; pid="${U_LOCKED[$id]##*:}"
+    total=$(( total + ${U_BYTES[$id]} ))
+    printf '  %s%8s%s  %s\n            held by: %s (pid %s)\n' \
+      "$C_B" "$(human "${U_BYTES[$id]}")" "$C_RESET" "${U_LABEL[$id]}" "$app" "$pid"
+    [[ -n "${U_FLAG[$id]}" ]] && printf '            quit it, then re-run with: %s\n' "${U_FLAG[$id]}"
+  done
+  (( any )) && printf '\n  %sunlock %s by closing those apps%s\n' "$C_YEL" "$(human "$total")" "$C_RESET"
+  return 0
+}
+
+report_lossy_withheld() {
+  local id any=0 total=0
+  for id in "${SKIPPED_LOSSY[@]}"; do
+    [[ -z "$id" ]] && continue
+    (( ${U_BYTES[$id]:-0} > 0 )) || continue
+    if (( any == 0 )); then section "Withheld — these lose information"; any=1; fi
+    total=$(( total + ${U_BYTES[$id]} ))
+    printf '  %s%8s%s  %s\n' "$C_B" "$(human "${U_BYTES[$id]}")" "$C_RESET" "${U_LABEL[$id]}"
+  done
+  (( any )) && printf '\n  %s%s available behind --allow-lossy (not run automatically)%s\n' \
+    "$C_YEL" "$(human "$total")" "$C_RESET"
+  return 0
+}
+
+report_heavyweights() {
+  (( ${#HEAVY_LIST[@]} )) || return 0
+  section "Large directories no rule covers"
+  local row b p cls
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    b="${row%%$'\t'*}"; p="${row#*$'\t'}"; cls="${p##*$'\t'}"; p="${p%%$'\t'*}"
+    printf '  %s%8s%s  %-46s %s%s%s\n' "$C_B" "$(human "$b")" "$C_RESET" \
+      "${p/#$HOME/~}" "$C_DIM" "$cls" "$C_RESET"
+  done < <(printf '%s\n' "${HEAVY_LIST[@]}" | sort -rn)
+  printf '\n  %snothing above was deleted — review these yourself%s\n' "$C_DIM" "$C_RESET"
+  return 0
+}
+
+report_summary() {
+  section "Summary"
+  local avail; avail=$(avail_bytes "$TARGET_PATH")
+  if [[ $APPLY -eq 1 ]]; then
+    printf '  %sFreed this run: %s%s\n' "$C_GRN$C_B" "$(human "$TOTAL_BYTES")" "$C_RESET"
+    printf '  Free on %s: %s\n' "$TARGET_MOUNT" "$(human "$avail")"
+    (( ${#DECLINED[@]} )) && printf '  %s%d step(s) declined at the prompt%s\n' \
+      "$C_DIM" "${#DECLINED[@]}" "$C_RESET"
+    if [[ -n "$TARGET_BYTES" ]]; then
+      if (( avail >= TARGET_BYTES )); then
+        printf '  %s✓ target %s met%s\n' "$C_GRN" "$(human "$TARGET_BYTES")" "$C_RESET"
+        (( STOPPED_EARLY )) && printf '  %s%d further steps skipped — not needed%s\n' \
+          "$C_DIM" "${#UNRUN[@]}" "$C_RESET"
+      else
+        printf '  %s✗ short of target %s by %s%s\n' "$C_RED" "$(human "$TARGET_BYTES")" \
+          "$(human $(( TARGET_BYTES - avail )))" "$C_RESET"
+      fi
+    fi
+  else
+    printf '  %sReclaimable (dry-run): %s%s\n' "$C_CYN$C_B" "$(human "$TOTAL_BYTES")" "$C_RESET"
+    printf '  Re-run with %s--apply%s to reclaim it.\n' "$C_B" "$C_RESET"
+  fi
+  printf '  %sProtected & never touched: source trees, Downloads, ~/.ollama models,\n  MEGA/Dropbox, Docker named volumes, ~/.claude memory/settings, running jobs.%s\n' \
+    "$C_DIM" "$C_RESET"
+  return 0
+}
+
+emit_json() {
+  local id first=1
+  printf '{\n'
+  printf '  "applied": %s,\n' "$([[ $APPLY -eq 1 ]] && echo true || echo false)"
+  printf '  "target_bytes": %s,\n' "${TARGET_BYTES:-null}"
+  printf '  "target_mount": "%s",\n' "$TARGET_MOUNT"
+  printf '  "available_bytes": %s,\n' "$(avail_bytes "$TARGET_PATH")"
+  printf '  "reclaimable_bytes": %s,\n' "$TOTAL_BYTES"
+  printf '  "units": [\n'
+  for id in "${U_IDS[@]}"; do
+    (( ${U_BYTES[$id]} > 0 )) || continue
+    (( first )) || printf ',\n'
+    first=0
+    printf '    {"id": "%s", "tier": %s, "reversible": %s, "bytes": %s, "locked_by": "%s"}' \
+      "$id" "${U_TIER[$id]}" "${U_REV[$id]}" "${U_BYTES[$id]}" "${U_LOCKED[$id]}"
+  done
+  printf '\n  ]\n}\n'
+}
+
+# ---------------------------------------------------------------------------------
 # filesystem survey
 # ---------------------------------------------------------------------------------
 mount_of()    { df -P "$1" 2>/dev/null | awk 'NR==2{print $6}'; }
@@ -1329,6 +1422,48 @@ sttest_executor() {
   st_assert "--yes lossy unit freed bytes" "$TOTAL_BYTES" "4194304"
 
   APPLY=0 ASSUME_YES=0 TARGET_BYTES="" TARGET_PATH="$HOME" SELECTED=()
+}
+
+sttest_reporting() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  register_unit r1 3 1 "jetbrains caches" paths "$root/.config/FakeApp/Cache"
+  probe_unit r1
+  U_LOCKED[r1]="android-studio:324491"
+
+  local out; out=$(report_locked)
+  st_assert "locked section names the app"  "$(printf '%s' "$out" | grep -c 'android-studio')" "1"
+  st_assert "locked section shows the pid"  "$(printf '%s' "$out" | grep -c '324491')"        "1"
+  # the size shows on the unit's own line and again in the "unlock N" total, so
+  # assert presence rather than an exact line count
+  st_assert_ne "locked section shows a size" "$(printf '%s' "$out" | grep -c '2.0MiB')"       "0"
+
+  SKIPPED_LOSSY=(r1)
+  out=$(report_lossy_withheld)
+  st_assert "withheld section suggests the flag" "$(printf '%s' "$out" | grep -c -- '--allow-lossy')" "1"
+
+  HEAVY_LIST=("$(printf '5368709120\t%s/Downloads\tdata' "$root")")
+  out=$(report_heavyweights)
+  st_assert "heavyweight report shows path"  "$(printf '%s' "$out" | grep -c 'Downloads')" "1"
+  st_assert "heavyweight report is advisory" "$(printf '%s' "$out" | grep -ci 'nothing.*deleted')" "1"
+
+  # JSON must be parseable and must not claim to have deleted anything in dry-run
+  APPLY=0 TOTAL_BYTES=2097152 TARGET_BYTES="" STOPPED_EARLY=0
+  out=$(emit_json)
+  st_assert "json has reclaimable key" "$(printf '%s' "$out" | grep -c '"reclaimable_bytes"')" "1"
+  st_assert "json marks dry-run"       "$(printf '%s' "$out" | grep -c '"applied": false')"    "1"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null
+    st_assert "json parses" "$?" "0"
+
+    # and it must still be valid JSON when no unit has any bytes
+    st_reset_registry
+    out=$(emit_json)
+    printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null
+    st_assert "json parses with zero units" "$?" "0"
+  fi
+  SKIPPED_LOSSY=(); HEAVY_LIST=(); TOTAL_BYTES=0
 }
 
 confirm() { # confirm "question"  -> 0 yes / 1 no
