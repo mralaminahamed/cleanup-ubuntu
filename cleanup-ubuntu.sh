@@ -144,7 +144,10 @@ while [[ $# -gt 0 ]]; do
     --discover)       DO_DISCOVER=1 ;;
     --json)           JSON_OUT=1 ;;
     --self-test)      SELF_TEST=1 ;;
-    -h|--help)        grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)        # only the leading header block: stop at the first line
+                      # that is not a comment, so body comments stay internal
+                      awk 'NR==1{next} /^#( |$)/{sub(/^# ?/,""); print; next} {exit}' "$0"
+                      exit 0 ;;
     *) echo "unknown option: $1  (try --help)" >&2; exit 2 ;;
   esac
   shift
@@ -1315,6 +1318,21 @@ sttest_sites_idle_units() {
   for id in "${U_IDS[@]}"; do
     st_assert "sites-idle unit $id is lossy tier 4" "${U_TIER[$id]}/${U_REV[$id]}" "4/0"
   done
+}
+
+sttest_help_bounded() {
+  # --help renders the leading header block. It must not spill the body's own
+  # source comments, which describe internals no user asked about.
+  local h; h=$(bash "$0" --help 2>&1)
+  st_assert "help stops before the body" \
+    "$(printf '%s' "$h" | grep -c 'XDG basedir')" "0"
+  st_assert "help does not leak function comments" \
+    "$(printf '%s' "$h" | grep -c 'index-aligned')" "0"
+  # ...while still carrying the real header, top and bottom
+  st_assert_ne "help keeps the title line" \
+    "$(printf '%s' "$h" | grep -c 'intelligent, process-aware disk cleanup')" "0"
+  st_assert_ne "help keeps the last header line" \
+    "$(printf '%s' "$h" | grep -c 'Exit status is always 0')" "0"
 }
 
 sttest_build_tool_units() {
