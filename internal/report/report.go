@@ -1,0 +1,116 @@
+// Package report renders what was found and what happened.
+package report
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+
+	"github.com/mralaminahamed/cleanup-ubuntu/internal/discover"
+	"github.com/mralaminahamed/cleanup-ubuntu/internal/fsutil"
+	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+)
+
+// Summary is everything one run wants to tell the user.
+type Summary struct {
+	Selected     []*unit.Unit
+	Locked       []*unit.Unit
+	Withheld     []*unit.Unit
+	Heavy        []discover.Heavy
+	TotalBytes   int64
+	DryRun       bool
+	StoppedEarly bool
+}
+
+type jsonUnit struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Tier     int    `json:"tier"`
+	Bytes    int64  `json:"bytes"`
+	Mount    string `json:"mount,omitempty"`
+	Flag     string `json:"flag,omitempty"`
+	LockedBy string `json:"locked_by,omitempty"`
+	PID      int    `json:"pid,omitempty"`
+}
+
+// JSON writes a machine-readable summary.
+func JSON(w io.Writer, s Summary) error {
+	out := map[string]any{
+		"dry_run":           s.DryRun,
+		"reclaimable_bytes": s.TotalBytes,
+		"reclaimable_human": fsutil.Human(s.TotalBytes),
+		"stopped_early":     s.StoppedEarly,
+		"units":             toJSON(s.Selected),
+		"locked":            toJSON(s.Locked),
+		"withheld":          toJSON(s.Withheld),
+	}
+	heavy := make([]map[string]any, 0, len(s.Heavy))
+	for _, h := range s.Heavy {
+		heavy = append(heavy, map[string]any{"path": h.Path, "bytes": h.Bytes})
+	}
+	out["heavyweights"] = heavy
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func toJSON(us []*unit.Unit) []jsonUnit {
+	out := make([]jsonUnit, 0, len(us))
+	for _, u := range us {
+		out = append(out, jsonUnit{u.ID, u.Label, int(u.Tier), u.Bytes, u.Mount, u.Flag, u.LockedBy, u.PID})
+	}
+	return out
+}
+
+// Text writes the human-readable report.
+func Text(w io.Writer, s Summary) {
+	if s.DryRun {
+		fmt.Fprintln(w, "DRY-RUN — nothing was deleted. Re-run with --apply to clean.")
+	}
+
+	if len(s.Selected) > 0 {
+		fmt.Fprintln(w, "\n== Reclaimable ==")
+		for _, u := range s.Selected {
+			fmt.Fprintf(w, "  • %-38s %10s\n", u.Label, fsutil.Human(u.Bytes))
+		}
+	}
+
+	if len(s.Locked) > 0 {
+		fmt.Fprintln(w, "\n== Locked by running apps ==")
+		for _, u := range s.Locked {
+			fmt.Fprintf(w, "  • %-38s %10s  held by %s (pid %d)\n",
+				u.Label, fsutil.Human(u.Bytes), u.LockedBy, u.PID)
+			fmt.Fprintf(w, "      quit it, then re-run\n")
+		}
+	}
+
+	if len(s.Withheld) > 0 {
+		fmt.Fprintln(w, "\n== Withheld (may destroy information) ==")
+		for _, u := range s.Withheld {
+			line := fmt.Sprintf("  • %-38s %10s", u.Label, fsutil.Human(u.Bytes))
+			if u.Flag != "" {
+				line += fmt.Sprintf("  include with: %s --allow-lossy", u.Flag)
+			} else {
+				line += "  include with: --allow-lossy"
+			}
+			fmt.Fprintln(w, line)
+		}
+	}
+
+	if len(s.Heavy) > 0 {
+		fmt.Fprintln(w, "\n== Large directories (advisory, never deleted) ==")
+		for _, h := range s.Heavy {
+			fmt.Fprintf(w, "  • %-38s %10s\n", h.Path, fsutil.Human(h.Bytes))
+		}
+	}
+
+	verb := "would free"
+	if !s.DryRun {
+		verb = "freed"
+	}
+	fmt.Fprintf(w, "\n%s %s\n", verb, fsutil.Human(s.TotalBytes))
+	if s.StoppedEarly {
+		fmt.Fprintln(w, "stopped early: free-space target met")
+	}
+}

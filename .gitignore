@@ -4,3 +4,7 @@
 
 # local design notes — kept on disk, not published
 docs/superpowers/
+
+# go build output
+/ubclean
+/dist/
