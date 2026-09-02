@@ -35,7 +35,9 @@
 #                       volumes). Auto-escalation NEVER crosses this line
 #                       on its own, and each such step is still confirmed
 #                       one at a time unless --yes is given.
-#   --discover          scan for app caches with no hardcoded rule, and
+#   --discover          scan for app caches with no hardcoded rule -- every
+#                       directory directly under ~/.cache, plus name-matched
+#                       cache dirs nested in ~/.config and ~/.local/share -- and
 #                       report large directories nothing covers.
 #   --json              machine-readable probe output.
 #   --self-test         run the built-in test suite and exit.
@@ -53,6 +55,10 @@
 #   --jetbrains         clear JetBrains IDE caches (only if no JetBrains proc runs)
 #   --browsers          clear browser HTTP caches (only for browsers not running)
 #   --playwright        remove Playwright browser binaries (~/.cache/ms-playwright)
+#   --gradle            clear ~/.gradle/caches and ~/.gradle/wrapper (only if no
+#                       Gradle daemon or Android Studio is running; next build
+#                       re-downloads every dependency)
+#   --maven             clear ~/.m2/repository (re-downloaded on next build)
 #   --deps DAYS         remove stale node_modules AND composer vendor dirs not
 #                       modified in DAYS days (alias: --node-modules)
 #   --sites-idle DAYS [DIR]
@@ -115,6 +121,8 @@ while [[ $# -gt 0 ]]; do
     --jetbrains)      DO_JETBRAINS=1; FORCED_FLAGS+=" --jetbrains" ;;
     --browsers)       DO_BROWSERS=1; FORCED_FLAGS+=" --browsers" ;;
     --playwright)     DO_PLAYWRIGHT=1; FORCED_FLAGS+=" --playwright" ;;
+    --gradle)         FORCED_FLAGS+=" --gradle" ;;
+    --maven)          FORCED_FLAGS+=" --maven" ;;
     --deps|--node-modules) DEPS_DAYS="${2:-30}"; FORCED_FLAGS+=" --deps"; shift ;;
     --sites-idle)     SITES_IDLE_DAYS="${2:-30}"; FORCED_FLAGS+=" --sites-idle"; shift
                       # optional DIR arg: consume it only if it's an existing dir
@@ -314,15 +322,17 @@ LOCK_RX=(
   '/postman( |$)|/Postman( |$)'
   '/goose( |$)'
   'figma-linux|/figma( |$)'
+  'GradleDaemon|/gradlew( |$)|/gradle( |$)|KotlinCompileDaemon'
 )
 LOCK_NAME=(
   "android-studio" "jetbrains-ide" "zed" "vscode" "chrome" "brave"
-  "firefox" "slack" "discord" "postman" "goose" "figma"
+  "firefox" "slack" "discord" "postman" "goose" "figma" "gradle"
 )
 LOCK_ROOTS=(
   "$HOME/.cache/JetBrains
 $HOME/.config/JetBrains
-$HOME/.local/share/JetBrains"
+$HOME/.local/share/JetBrains
+$HOME/.gradle"
   "$HOME/.cache/JetBrains
 $HOME/.config/JetBrains
 $HOME/.local/share/JetBrains"
@@ -343,6 +353,7 @@ $HOME/.mozilla"
   "$HOME/.config/Postman"
   "$HOME/.config/goose"
   "$HOME/.config/figma-linux"
+  "$HOME/.gradle"
 )
 
 # Overridable by self-test so lock logic can be exercised without real processes.
@@ -451,6 +462,7 @@ $HOME/.cargo/registry/src"
   register_unit devtools-mcp  1 1 "chrome-devtools-mcp" paths "$HOME/.cache/chrome-devtools-mcp"
   register_unit act-cache     1 1 "act (gh actions)"   paths "$HOME/.cache/act"
   register_unit giget         1 1 "giget templates"    paths "$HOME/.cache/giget"
+  register_extra_pkg_units
 
   # --- tier 2: bigger regenerable artefacts ---
   register_unit playwright 2 1 "playwright browsers" paths "$HOME/.cache/ms-playwright" "--playwright"
@@ -459,6 +471,7 @@ $HOME/.cargo/registry/src"
 
   # --- tier 3: costs a reindex or a cold load ---
   register_unit jetbrains-cache 3 1 "JetBrains caches" paths "$HOME/.cache/JetBrains" "--jetbrains"
+  register_build_tool_units
   register_browser_units
 
   # --- tier 0/1 but on / rather than $HOME: only useful when / is the full one ---
@@ -700,10 +713,61 @@ PROTECTED_NAMES=(
 DISCOVER_ROOTS=("$HOME/.config" "$HOME/.local/share" "$HOME/.cache")
 
 is_cache_name() {
-  local n="$1" x
-  for x in "${PROTECTED_NAMES[@]}"; do [[ "$n" == "$x" ]] && return 1; done
-  for x in "${CACHE_NAMES[@]}";     do [[ "$n" == "$x" ]] && return 0; done
+  # Compare case-insensitively: Chromium ships "Cache"/"GPUCache", but most Linux
+  # apps use lowercase. Protection is matched the same way, so a lowercase
+  # "cookies" is still refused.
+  local n="${1,,}" x
+  for x in "${PROTECTED_NAMES[@]}"; do [[ "$n" == "${x,,}" ]] && return 1; done
+  for x in "${CACHE_NAMES[@]}";     do [[ "$n" == "${x,,}" ]] && return 0; done
   return 1
+}
+
+# True when some already-registered unit lists this exact path, so the generic
+# scanners never re-claim what a hardcoded unit already owns.
+path_claimed() {
+  local want="$1" id line
+  for id in "${U_IDS[@]}"; do
+    while IFS= read -r line; do
+      [[ "$line" == "$want" ]] && return 0
+    done <<< "${U_PAYLOAD[$id]}"
+  done
+  return 1
+}
+
+# Everything directly inside ~/.cache is by definition regenerable (XDG basedir
+# spec), so it needs no name whitelist -- unlike ~/.config, where a cache sits
+# beside real state. discover_app_caches handles that deeper, name-matched case.
+discover_xdg_caches() {
+  local root="${XDG_CACHE_ROOT:-$HOME/.cache}" d name id
+  [[ -d "$root" ]] || return 0
+  while IFS= read -r d; do
+    [[ -z "$d" ]] && continue
+    path_claimed "$d" && continue
+    name=$(basename "$d")
+    id="xdg-${name}"; id="${id// /-}"
+    [[ -n "${U_TIER[$id]:-}" ]] && continue
+    register_unit "$id" 2 1 ".cache/$name" paths "$d"
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+}
+
+# Gradle and Maven re-download everything on the next build: regenerable, but the
+# cold fetch is expensive, so they sit at tier 3 beside the JetBrains reindex and
+# stay behind an explicit flag.
+register_build_tool_units() {
+  local g="${GRADLE_ROOT:-$HOME/.gradle}" m="${MAVEN_ROOT:-$HOME/.m2}"
+  [[ -d "$g/caches"  ]] && register_unit gradle-caches  3 1 "gradle caches"  paths "$g/caches"  "--gradle"
+  [[ -d "$g/wrapper" ]] && register_unit gradle-wrapper 3 1 "gradle wrapper" paths "$g/wrapper" "--gradle"
+  [[ -d "$g/daemon"  ]] && register_unit gradle-daemon  1 1 "gradle daemon logs" paths "$g/daemon"
+  [[ -d "$m/repository" ]] && register_unit maven-repo  3 1 "maven repository" paths "$m/repository" "--maven"
+  return 0
+}
+
+register_extra_pkg_units() {
+  local h="${PKG_HOME:-$HOME}"
+  [[ -d "$h/.deno"           ]] && register_unit deno-cache  1 1 "deno cache"  paths "$h/.deno"
+  [[ -d "$h/.nuget/packages" ]] && register_unit nuget-cache 1 1 "nuget packages" paths "$h/.nuget/packages"
+  [[ -d "$h/.gem"            ]] && register_unit gem-cache   1 1 "gem cache"   paths "$h/.gem"
+  return 0
 }
 
 discover_app_caches() {
@@ -1253,6 +1317,123 @@ sttest_sites_idle_units() {
   done
 }
 
+sttest_build_tool_units() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  mkdir -p "$root/.gradle/caches/modules-2" "$root/.gradle/wrapper/dists" \
+           "$root/.gradle/daemon" "$root/.m2/repository/org"
+  truncate -s 3M "$root/.gradle/caches/modules-2/lib.jar"
+  truncate -s 1M "$root/.gradle/wrapper/dists/gradle.zip"
+  truncate -s 2M "$root/.m2/repository/org/lib.jar"
+
+  GRADLE_ROOT="$root/.gradle" MAVEN_ROOT="$root/.m2" register_build_tool_units
+
+  local g_cache=0 g_wrap=0 m_repo=0 id
+  for id in "${U_IDS[@]}"; do
+    [[ "$id" == gradle-caches  ]] && g_cache=1
+    [[ "$id" == gradle-wrapper ]] && g_wrap=1
+    [[ "$id" == maven-repo     ]] && m_repo=1
+  done
+  st_assert "gradle caches registered"  "$g_cache" "1"
+  st_assert "gradle wrapper registered" "$g_wrap"  "1"
+  st_assert "maven repo registered"     "$m_repo"  "1"
+
+  # regenerable, but a cold re-download — same tier as a JetBrains reindex
+  st_assert "gradle caches reversible tier 3" \
+    "${U_TIER[gradle-caches]:-}/${U_REV[gradle-caches]:-}" "3/1"
+  st_assert "maven repo reversible tier 3" \
+    "${U_TIER[maven-repo]:-}/${U_REV[maven-repo]:-}" "3/1"
+  st_assert "gradle caches opt-in flag" "${U_FLAG[gradle-caches]:-}" "--gradle"
+  st_assert "maven repo opt-in flag"    "${U_FLAG[maven-repo]:-}"    "--maven"
+  st_assert "gradle caches claims caches dir" \
+    "${U_PAYLOAD[gradle-caches]:-}" "$root/.gradle/caches"
+
+  # a build tool that is not installed must contribute nothing
+  st_reset_registry
+  GRADLE_ROOT="$root/absent" MAVEN_ROOT="$root/absent" register_build_tool_units
+  st_assert "absent build tools register nothing" "${#U_IDS[@]}" "0"
+}
+
+sttest_gradle_lock() {
+  # a running Gradle daemon or Android Studio must park the gradle units
+  local hit=0 i
+  for i in "${!LOCK_RX[@]}"; do
+    [[ "${LOCK_NAME[$i]}" == "gradle" ]] && hit=1
+  done
+  st_assert "gradle has a lock rule" "$hit" "1"
+
+  local matched=0 i
+  for i in "${!LOCK_RX[@]}"; do
+    [[ "${LOCK_NAME[$i]}" == "gradle" ]] || continue
+    [[ "java -cp /home/u/.gradle/wrapper/dists GradleDaemon 8.5" =~ ${LOCK_RX[$i]} ]] && matched=1
+  done
+  st_assert "GradleDaemon command line matches the gradle lock" "$matched" "1"
+}
+
+sttest_cache_name_case() {
+  # XDG and most Linux apps use lowercase; the whitelist was Chromium-cased only
+  st_assert "lowercase cache matched"  "$(is_cache_name 'cache'    && echo y || echo n)" "y"
+  st_assert "uppercase CACHE matched"  "$(is_cache_name 'CACHE'    && echo y || echo n)" "y"
+  st_assert "mixed GpuCache matched"   "$(is_cache_name 'GpuCache' && echo y || echo n)" "y"
+  # protection must stay case-insensitive too, or lowercase state dirs get eaten
+  st_assert "lowercase local storage PROTECTED" \
+    "$(is_cache_name 'local storage' && echo y || echo n)" "n"
+  st_assert "lowercase cookies PROTECTED" \
+    "$(is_cache_name 'cookies' && echo y || echo n)" "n"
+  st_assert "uppercase INDEXEDDB PROTECTED" \
+    "$(is_cache_name 'INDEXEDDB' && echo y || echo n)" "n"
+}
+
+sttest_xdg_cache_discovery() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  mkdir -p "$root/.cache/randomtool" "$root/.cache/npm"
+  truncate -s 2M "$root/.cache/randomtool/blob"
+
+  # a hardcoded unit already owns .cache/npm — discovery must not claim it twice
+  register_unit npm-cacache 1 1 "npm cache" paths "$root/.cache/npm"
+
+  XDG_CACHE_ROOT="$root/.cache" discover_xdg_caches
+
+  local found_random=0 npm_seen=0 id
+  for id in "${U_IDS[@]}"; do
+    [[ "${U_PAYLOAD[$id]}" == "$root/.cache/randomtool" ]] && found_random=1
+    [[ "${U_PAYLOAD[$id]}" == "$root/.cache/npm" ]] && npm_seen=$((npm_seen + 1))
+  done
+  st_assert "unclaimed ~/.cache child discovered"    "$found_random" "1"
+  st_assert "claimed ~/.cache child not re-claimed"  "$npm_seen"     "1"
+
+  for id in "${U_IDS[@]}"; do
+    [[ "${U_PAYLOAD[$id]}" == "$root/.cache/randomtool" ]] || continue
+    st_assert "discovered xdg cache is reversible tier 2" \
+      "${U_TIER[$id]}/${U_REV[$id]}" "2/1"
+  done
+}
+
+sttest_extra_pkg_units() {
+  local root; root=$(st_fixture)
+  st_reset_registry
+
+  mkdir -p "$root/.deno" "$root/.nuget/packages" "$root/.gem"
+  truncate -s 1M "$root/.deno/dep" "$root/.nuget/packages/dep" "$root/.gem/dep"
+
+  PKG_HOME="$root" register_extra_pkg_units
+
+  local deno=0 nuget=0 gem=0 id
+  for id in "${U_IDS[@]}"; do
+    [[ "$id" == deno-cache  ]] && deno=1
+    [[ "$id" == nuget-cache ]] && nuget=1
+    [[ "$id" == gem-cache   ]] && gem=1
+  done
+  st_assert "deno cache registered"  "$deno"  "1"
+  st_assert "nuget cache registered" "$nuget" "1"
+  st_assert "gem cache registered"   "$gem"   "1"
+  st_assert "deno cache is reversible tier 1" \
+    "${U_TIER[deno-cache]:-}/${U_REV[deno-cache]:-}" "1/1"
+}
+
 sttest_discovery_caches() {
   # cache-semantic names are matched
   st_assert "Cache matched"        "$(is_cache_name 'Cache' && echo y || echo n)"        "y"
@@ -1572,7 +1753,7 @@ fi
 # ---------------------------------------------------------------------------------
 main() {
   register_all_units
-  [[ $DO_DISCOVER -eq 1 ]] && discover_app_caches
+  [[ $DO_DISCOVER -eq 1 ]] && { discover_app_caches; discover_xdg_caches; }
 
   local id
   for id in "${U_IDS[@]}"; do probe_unit "$id"; done
