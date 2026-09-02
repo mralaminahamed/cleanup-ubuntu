@@ -1,108 +1,125 @@
-# cleanup-ubuntu
+# reclaim
 
-Process-aware disk cleanup for Ubuntu / Debian. Safe by default: dry-run unless
-told otherwise, reclaims regenerable caches only, and never touches source
-trees, documents, LLM models, or databases.
-
-Two implementations live here:
-
-| | `cleanup-ubuntu.sh` | `ubclean` (Go) |
-|---|---|---|
-| Status | shipping, feature-complete | core complete, porting continues |
-| Install | copy one file, run it | `go build ./cmd/ubclean` |
-| Dry run of a full machine | ~3 min | ~2 s |
-| Tests | 201 built-in assertions | `go test ./...` |
-
-## The shell version
+Process-aware storage reclamation for Ubuntu and Debian. Safe by default: it
+measures and reports unless told otherwise, reclaims regenerable caches only,
+and never touches source trees, documents, LLM models, or databases.
 
 ```bash
-./cleanup-ubuntu.sh              # dry-run — show what would be freed
-./cleanup-ubuntu.sh --apply      # actually clean
-./cleanup-ubuntu.sh --help       # full flag reference
-./cleanup-ubuntu.sh --self-test  # run the built-in suite
+go build -o reclaim ./cmd/reclaim
+
+reclaim clean                     # dry-run report, deletes nothing
+reclaim clean --apply             # reclaim, prompting first
+reclaim status                    # filesystems and disk pressure
+reclaim analyze --min 1G          # largest directories, advisory only
+reclaim history                   # what past runs actually deleted
 ```
 
-Published as gist [`b3ac5feada7e45ec834952162184bfec`](https://gist.github.com/b3ac5feada7e45ec834952162184bfec).
-It is deliberately a single self-contained file so it can be copy-pasted onto a
-machine without cloning anything, and read in full before being trusted with
-`--apply`.
+## Usage
 
-## The Go version
+### Targets
 
 ```bash
-go build -o ubclean ./cmd/ubclean
-
-./ubclean clean                       # dry-run report
-./ubclean clean --apply               # clean, prompting first
-./ubclean clean --free 12G            # clean until 12G is free, then stop
-./ubclean clean --discover --gradle   # include unknown caches and Gradle
-./ubclean status                      # filesystems and free space
-./ubclean analyze --min 1G            # largest directories, deletes nothing
-./ubclean history                     # what past runs actually deleted
+reclaim clean --free 12G          # clean until 12G is free, then stop
+reclaim clean --auto              # read disk pressure and pick a target
+reclaim clean --tier 2            # never escalate past tier 2
 ```
 
-Selection options the shell version does not have:
+`--auto` reads the worst filesystem and lets how full it is decide how hard to
+try: a comfortable disk gets only the free tiers, a critical one earns a cold
+reload.
+
+### Scope
 
 ```bash
---only pip-cache --only 'xdg-*'   # restrict the run
---exclude 'npm-*'                 # drop units by id or glob
---workers 12                      # size the probe pool
+reclaim clean --discover          # also claim caches with no hardcoded rule
+reclaim clean --only pip-cache --only 'xdg-*'
+reclaim clean --exclude 'npm-*'
+reclaim clean --workers 12        # size the probe pool
 ```
 
-Set `UBCLEAN_NO_OPLOG=1` to disable the operations log.
+### Opt-in groups
 
-### Why a port
+Each of these raises the tier ceiling for its own units only:
 
-Probing is `du`-bound and every unit is independent, so it parallelises. That is
-the whole speed difference above. The other win is structural: ten parallel
-associative arrays keyed by unit id became one struct, so adding a field no
-longer means editing the registrar, the reset helper and the JSON emitter in
-lockstep.
+| Flag | Reclaims |
+|---|---|
+| `--gradle` | `~/.gradle/caches`, `~/.gradle/wrapper` |
+| `--maven` | `~/.m2/repository` |
+| `--jetbrains` | JetBrains IDE caches |
+| `--browsers` | Chrome, Brave and Firefox HTTP caches |
+| `--playwright` | Playwright browser binaries |
+| `--system` | apt cache, journal vacuum, superseded snap revisions |
+| `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
+| `--docker`, `--docker-volumes` | Docker prune (volumes may hold databases) |
+| `--sites-idle N` | dependency trees of projects idle N days |
 
-There are no third-party dependencies. For a tool that deletes files as root,
-an empty `go.mod` require block is a feature.
+Irreversible units additionally require `--allow-lossy`.
 
-### Not yet ported
-
-The Go version does **not** yet cover, and the shell version does:
-
-- `--system`: apt cache, journal vacuum, old snap revisions
-- `--deps` / `--sites-idle`: stale `node_modules` and `vendor` directories
-- `--claude-jobs` / `--claude-plugins` / `--claude-history`
-- per-mount pressure classification (`--auto` currently uses a crude target)
-
-Use `cleanup-ubuntu.sh` for those until they land.
+Set `RECLAIM_NO_OPLOG=1` to disable the operations log.
 
 ## Safety model
 
-Both implementations share it:
-
-- **Dry run by default.** Nothing is deleted without `--apply`.
-- **Tiers.** Units are ordered from "costs nothing" to "may be irreplaceable".
-  The planner walks tiers in order and will not cross a ceiling.
+- **Dry run by default.** Nothing is deleted, and no command runs, without
+  `--apply`.
+- **Tiers.** Units run from "costs nothing" to "may be irreplaceable", in that
+  order, and the planner will not cross the ceiling it was given.
 - **Reversibility is absolute.** An opt-in flag raises the tier ceiling but can
-  never authorise a unit that destroys information; only `--allow-lossy` does.
+  never authorise a unit that destroys information. Only `--allow-lossy` does,
+  and a test pins that distinction.
 - **Locks.** A cache belonging to a running application is skipped, and the
-  report names the app and pid so you know what to quit.
-- **Probe never deletes.** Everything reachable from the measuring phase is
-  read-only, asserted by tests in both implementations.
+  report names the app and its pid so you know what to quit. The tool excludes
+  its own process, so its command line cannot lock it out of its own work.
+- **Probing never deletes.** Everything reachable from the measuring phase is
+  read-only, asserted by a test that walks the tree before and after.
 - **Protected names.** `Local Storage`, `IndexedDB`, `Cookies`, `Login Data`
-  and friends are never matched as caches, in any casing.
+  and friends are never treated as caches, in any casing.
+- **Protected paths.** A backstop refuses `/`, top-level system directories and
+  `$HOME` however a unit is defined, so a malformed unit cannot aim the deleter
+  at the wrong tree.
 
-## Layout
+## Design
+
+Probing is `du`-bound and every unit is independent, so it runs on a worker
+pool. A full discovery run over this machine takes about 1.7 seconds.
+
+There are no third-party dependencies. For a tool that deletes files as root,
+an empty `require` block is a feature.
 
 ```
-cleanup-ubuntu.sh        the shell tool, one self-contained file
-cmd/ubclean/             the Go CLI
-internal/unit/           unit model and registry
-internal/catalog/        the table of things worth reclaiming
-internal/probe/          parallel measurement
-internal/lock/           running-application detection
-internal/plan/           tier ceiling and selection
-internal/runner/         execution, with a protected-path backstop
-internal/discover/       caches with no hardcoded rule
-internal/report/         text and JSON output
-internal/oplog/          append-only record of what was deleted
+cmd/reclaim/         the CLI
+internal/unit/       unit model and registry
+internal/catalog/    the table of things worth reclaiming
+internal/system/     apt, journal and snap units
+internal/scan/       dependency trees of idle projects
+internal/probe/      parallel measurement
+internal/lock/       running-application detection
+internal/plan/       tier ceiling and selection
+internal/runner/     execution, with a protected-path backstop
+internal/discover/   caches with no hardcoded rule
+internal/report/     text and JSON output
+internal/oplog/      append-only record of what was deleted
+internal/fsutil/     sizes, mounts and pressure
+```
+
+## Development
+
+```bash
+go test ./...          # unit and end-to-end tests
+go test ./... -race
+go vet ./...
+```
+
+The CLI tests build the real binary and run it against a fixture `HOME`, so flag
+parsing, exit codes and JSON validity are covered end to end.
+
+### History
+
+This began as a single self-contained bash script, which reached 1615 lines and
+201 built-in assertions before being ported. The shell version is preserved in
+git history if you need it:
+
+```bash
+git show 67fd60c:reclaim.sh > reclaim.sh
 ```
 
 ## License
