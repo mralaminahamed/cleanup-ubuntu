@@ -66,6 +66,9 @@ type Unit struct {
 	// LockedBy names the running application that makes this unit unsafe to
 	// run right now. Empty means free to run.
 	LockedBy string
+	// PID is the process that holds the lock, so the report can tell the user
+	// exactly what to quit.
+	PID int
 }
 
 // Registry holds units in stable registration order.
