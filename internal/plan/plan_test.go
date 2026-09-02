@@ -72,6 +72,29 @@ func TestSelectWithholdsLossyUnlessAllowed(t *testing.T) {
 	}
 }
 
+func TestFlaggedUnitsAreOptInRegardlessOfTier(t *testing.T) {
+	// A unit carrying a flag is opt-in by definition. The tier ceiling is a
+	// separate, additional limit -- it must not silently authorise a flagged
+	// unit just because the ceiling happens to be high. Without this, a plain
+	// "clean --apply" wipes the Gradle cache nobody asked about.
+	r := reg(
+		&unit.Unit{ID: "plain", Tier: unit.TierPkgCache, Reversible: true, Bytes: 5},
+		&unit.Unit{ID: "gradle", Tier: unit.TierColdReload, Reversible: true, Bytes: 900, Flag: "--gradle"},
+	)
+	sel, _ := Select(r, Options{TierCap: unit.TierIrreplaceable})
+	eq(t, ids(sel), []string{"plain"})
+
+	sel, _ = Select(r, Options{TierCap: unit.TierIrreplaceable, Forced: map[string]bool{"--gradle": true}})
+	eq(t, ids(sel), []string{"plain", "gradle"})
+}
+
+func TestUnflaggedUnitsStillRunByDefault(t *testing.T) {
+	// The opt-in rule must not accidentally make ordinary caches opt-in too.
+	r := reg(&unit.Unit{ID: "npm", Tier: unit.TierPkgCache, Reversible: true, Bytes: 5})
+	sel, _ := Select(r, Options{TierCap: unit.TierIrreplaceable})
+	eq(t, ids(sel), []string{"npm"})
+}
+
 func TestSelectRespectsTierCeiling(t *testing.T) {
 	r := reg(
 		&unit.Unit{ID: "cheap", Tier: unit.TierPkgCache, Reversible: true, Bytes: 5},

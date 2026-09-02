@@ -19,8 +19,8 @@ type Options struct {
 	// AllowLossy permits units that destroy information. This is the only way
 	// past that ceiling; an opt-in flag is not enough.
 	AllowLossy bool
-	// Forced holds opt-in flags the user passed, letting matching units exceed
-	// TierCap.
+	// Forced holds the opt-in flags the user passed. A unit carrying a flag
+	// runs only if its flag appears here, whatever the tier ceiling says.
 	Forced map[string]bool
 	// TargetMount, when set, restricts cleaning to one filesystem.
 	TargetMount string
@@ -46,8 +46,15 @@ func Select(r *unit.Registry, o Options) (selected, withheldLossy []*unit.Unit) 
 		if matchesAny(u.ID, o.Exclude, false) {
 			continue
 		}
-		// The reversibility ceiling is absolute. An opt-in flag raises the tier
-		// ceiling only; it can never authorise destroying information.
+		// A unit carrying a flag is opt-in: it runs only when that flag is
+		// given. The tier ceiling is a separate, additional limit, so a high
+		// ceiling must never silently authorise a flagged unit -- otherwise a
+		// plain "clean --apply" would wipe caches nobody asked about.
+		if u.Flag != "" && !forced {
+			continue
+		}
+		// The reversibility ceiling is absolute. An opt-in flag authorises a
+		// unit but can never authorise destroying information.
 		if !u.Reversible && !o.AllowLossy {
 			withheldLossy = append(withheldLossy, u)
 			continue
@@ -55,6 +62,7 @@ func Select(r *unit.Registry, o Options) (selected, withheldLossy []*unit.Unit) 
 		if u.Tier > o.TierCap && !forced {
 			continue
 		}
+
 		if u.LockedBy != "" {
 			continue
 		}
