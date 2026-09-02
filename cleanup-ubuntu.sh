@@ -1014,11 +1014,11 @@ parse_size() {
   [[ "$s" =~ ^([0-9]+)([KMGT]?)B?$ ]] || return 1
   n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
   case "$unit" in
-    '') echo "$n" ;;
-    K)  echo $(( n * 1024 )) ;;
-    M)  echo $(( n * 1024 * 1024 )) ;;
-    G)  echo $(( n * 1024 * 1024 * 1024 )) ;;
-    T)  echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
+    '') echo $(( 10#$n )) ;;
+    K)  echo $(( 10#$n * 1024 )) ;;
+    M)  echo $(( 10#$n * 1024 * 1024 )) ;;
+    G)  echo $(( 10#$n * 1024 * 1024 * 1024 )) ;;
+    T)  echo $(( 10#$n * 1024 * 1024 * 1024 * 1024 )) ;;
   esac
 }
 
@@ -1056,6 +1056,8 @@ sttest_mounts() {
   st_assert "parse_size M"            "$(parse_size 2M)"    "2097152"
   st_assert "parse_size G"            "$(parse_size 12G)"   "12884901888"
   st_assert "parse_size lowercase g"  "$(parse_size 12g)"   "12884901888"
+  st_assert "parse_size leading zero is decimal" "$(parse_size 010G)" "10737418240"
+  st_assert "parse_size 09 is decimal not octal" "$(parse_size 09M)"  "9437184"
   parse_size "12.5G" >/dev/null 2>&1
   st_assert "parse_size rejects decimal" "$?" "1"
   parse_size "banana" >/dev/null 2>&1
