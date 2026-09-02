@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 func tree(t *testing.T, n int) string {

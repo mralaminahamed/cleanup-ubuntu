@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // Options controls selection.

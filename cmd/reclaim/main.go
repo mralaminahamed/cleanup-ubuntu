@@ -1,4 +1,4 @@
-// Command ubclean reclaims disk space on Ubuntu and Debian machines.
+// Command reclaim reclaims disk space on Ubuntu and Debian machines.
 //
 // Safe by default: with no flags it measures and reports, and deletes nothing.
 package main
@@ -13,25 +13,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/catalog"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/discover"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/fsutil"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/lock"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/oplog"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/plan"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/probe"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/report"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/runner"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/catalog"
+	"github.com/mralaminahamed/reclaim/internal/discover"
+	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/lock"
+	"github.com/mralaminahamed/reclaim/internal/oplog"
+	"github.com/mralaminahamed/reclaim/internal/plan"
+	"github.com/mralaminahamed/reclaim/internal/probe"
+	"github.com/mralaminahamed/reclaim/internal/report"
+	"github.com/mralaminahamed/reclaim/internal/runner"
+	"github.com/mralaminahamed/reclaim/internal/scan"
+	"github.com/mralaminahamed/reclaim/internal/system"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = `ubclean — process-aware disk cleanup for Ubuntu and Debian
+const usage = `reclaim — process-aware disk cleanup for Ubuntu and Debian
 
 USAGE
-  ubclean <command> [flags]
+  reclaim <command> [flags]
 
 COMMANDS
   clean      report reclaimable space, or reclaim it with --apply
@@ -40,7 +42,7 @@ COMMANDS
   history    show what past runs deleted
   version    print the version
 
-Run "ubclean <command> --help" for a command's flags.
+Run "reclaim <command> --help" for a command's flags.
 `
 
 func main() {
@@ -52,7 +54,7 @@ func main() {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	case "version", "--version":
-		fmt.Println("ubclean", version)
+		fmt.Println("reclaim", version)
 	case "clean":
 		os.Exit(cmdClean(os.Args[2:]))
 	case "status":
@@ -85,6 +87,8 @@ func cmdClean(args []string) int {
 		doDiscover = fs.Bool("discover", false, "also claim caches with no hardcoded rule")
 		jsonOut    = fs.Bool("json", false, "machine-readable output")
 		workers    = fs.Int("workers", runtime.NumCPU(), "parallel probe workers")
+		sitesIdle  = fs.Int("sites-idle", 0, "include dependency trees of projects idle this many days")
+		sitesRoot  = fs.String("sites-root", "", "where projects live (default ~/Sites)")
 		only       multiFlag
 		exclude    multiFlag
 		flags      multiFlag
@@ -93,7 +97,8 @@ func cmdClean(args []string) int {
 	fs.Var(&exclude, "exclude", "drop these unit ids or globs (repeatable)")
 	fs.Var(&flags, "with", "opt-in flag such as --gradle, passed as --with gradle (repeatable)")
 	for _, name := range []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
-		"docker", "docker-volumes", "claude-vm"} {
+		"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
+		"claude-history"} {
 		fs.Bool(name, false, "opt in to the "+name+" units")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -105,7 +110,8 @@ func cmdClean(args []string) int {
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "gradle", "maven", "jetbrains", "browsers", "playwright",
-			"docker", "docker-volumes", "claude-vm":
+			"docker", "docker-volumes", "claude-vm", "system", "claude-jobs",
+			"claude-plugins", "claude-history", "sites-idle":
 			forced["--"+f.Name] = true
 		}
 	})
@@ -116,6 +122,16 @@ func cmdClean(args []string) int {
 	// Build, measure, then lock. Locking after probing means a locked unit
 	// still reports its size, so the user knows what quitting the app buys.
 	reg := catalog.Build(catalog.DefaultEnv(home))
+	if forced["--system"] {
+		system.Add(reg, system.DefaultEnv())
+	}
+	if *sitesIdle > 0 {
+		root := *sitesRoot
+		if root == "" {
+			root = filepath.Join(home, "Sites")
+		}
+		scan.IdleProjects(reg, root, *sitesIdle)
+	}
 	if *doDiscover {
 		discover.XDGCaches(reg, filepath.Join(home, ".cache"))
 		discover.NestedCaches(reg, []string{
@@ -145,11 +161,33 @@ func cmdClean(args []string) int {
 		targetBytes = n
 		opts.TargetMount = fsutil.MountOf(home)
 	} else if *auto {
-		// Aim to get the filesystem holding home back under pressure.
-		if avail, err := fsutil.AvailBytes(home); err == nil {
-			targetBytes = avail + (2 << 30)
+		// Pressure-driven: aim the worst filesystem back under the high-water
+		// mark, and let how bad it is decide how hard to try. A comfortable
+		// disk gets only the free tiers; a critical one earns a cold reload.
+		mounts, err := fsutil.Mounts()
+		if err == nil && len(mounts) > 0 {
+			worst := fsutil.Worst(mounts)
+			opts.TargetMount = worst.Path
+			targetPath = worst.Path
+
+			const highWater = 85
+			if worst.UsedPct > highWater {
+				over := worst.Total * int64(worst.UsedPct-highWater) / 100
+				targetBytes = worst.Avail + over
+			}
+			switch worst.Pressure() {
+			case fsutil.PressureCritical:
+				opts.TierCap = unit.TierColdReload
+			case fsutil.PressureHigh:
+				opts.TierCap = unit.TierArtifact
+			case fsutil.PressureModerate:
+				opts.TierCap = unit.TierPkgCache
+			default:
+				opts.TierCap = unit.TierNative
+			}
+			fmt.Printf("auto: %s is %d%% used (%s) — cleaning to tier %d\n",
+				worst.Path, worst.UsedPct, worst.Pressure(), opts.TierCap)
 		}
-		opts.TargetMount = fsutil.MountOf(home)
 	}
 
 	selected, withheld := plan.Select(reg, opts)
@@ -170,7 +208,7 @@ func cmdClean(args []string) int {
 
 	log := &oplog.Log{
 		Path:     oplog.DefaultPath(home),
-		Disabled: os.Getenv("UBCLEAN_NO_OPLOG") != "",
+		Disabled: os.Getenv("RECLAIM_NO_OPLOG") != "",
 	}
 	var total int64
 	var ran []*unit.Unit
@@ -221,13 +259,14 @@ func cmdStatus(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	home, _ := os.UserHomeDir()
-	for _, p := range []string{"/", home} {
-		avail, err := fsutil.AvailBytes(p)
-		if err != nil {
-			continue
-		}
-		fmt.Printf("  %-28s %10s free   (mount %s)\n", p, fsutil.Human(avail), fsutil.MountOf(p))
+	mounts, err := fsutil.Mounts()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, m := range mounts {
+		fmt.Printf("  %-28s %8s free of %8s  %3d%%  %s\n",
+			m.Path, fsutil.Human(m.Avail), fsutil.Human(m.Total), m.UsedPct, m.Pressure())
 	}
 	return 0
 }

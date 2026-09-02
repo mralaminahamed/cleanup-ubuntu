@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 func TestApplyLocksUnitUnderRootOfRunningApp(t *testing.T) {

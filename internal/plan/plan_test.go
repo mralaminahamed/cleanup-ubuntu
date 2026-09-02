@@ -3,7 +3,7 @@ package plan
 import (
 	"testing"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 func reg(us ...*unit.Unit) *unit.Registry {

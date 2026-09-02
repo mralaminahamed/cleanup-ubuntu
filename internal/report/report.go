@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/discover"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/fsutil"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/discover"
+	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // Summary is everything one run wants to tell the user.

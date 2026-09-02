@@ -12,12 +12,12 @@ import (
 var bin string
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "ubclean-build")
+	dir, err := os.MkdirTemp("", "reclaim-build")
 	if err != nil {
 		panic(err)
 	}
 	defer os.RemoveAll(dir)
-	bin = filepath.Join(dir, "ubclean")
+	bin = filepath.Join(dir, "reclaim")
 	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
 		panic(string(out))
@@ -43,7 +43,7 @@ func fixtureHome(t *testing.T) string {
 func run(t *testing.T, home string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "HOME="+home, "UBCLEAN_NO_OPLOG=1")
+	cmd.Env = append(os.Environ(), "HOME="+home, "RECLAIM_NO_OPLOG=1")
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {

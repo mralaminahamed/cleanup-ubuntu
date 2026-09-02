@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 func fixture(t *testing.T) (string, *unit.Registry) {
@@ -44,7 +44,7 @@ func TestProbeMeasuresEachUnit(t *testing.T) {
 
 	want := map[string]int64{
 		"one": 1000, "two": 2000, "space": 3000,
-		"multi": 3000, // one + two
+		"multi":  3000, // one + two
 		"absent": 0,
 		"cmd":    0, // a command reclaims an unknown amount until it runs
 	}

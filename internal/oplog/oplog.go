@@ -32,7 +32,7 @@ type Log struct {
 
 // DefaultPath returns the usual location for the log under a home directory.
 func DefaultPath(home string) string {
-	return filepath.Join(home, ".local", "share", "cleanup-ubuntu", "operations.log")
+	return filepath.Join(home, ".local", "share", "reclaim", "operations.log")
 }
 
 // Append writes one entry, creating the parent directory if needed.

@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/fsutil"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // All measures every unit in r using at most workers goroutines. Passing 0 or

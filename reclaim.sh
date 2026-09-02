@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# cleanup-ubuntu.sh — intelligent, process-aware disk cleanup for Ubuntu / Debian
+# reclaim.sh — intelligent, process-aware disk cleanup for Ubuntu / Debian
 # ---------------------------------------------------------------------------------
 # Safe by default. Reclaims space from regenerable caches only. Never deletes
 # source code, documents, LLM models, or databases.
@@ -18,10 +18,10 @@
 #     syncs, and Docker *named* volumes are never touched.
 #
 # USAGE
-#   ./cleanup-ubuntu.sh                 # dry-run, show reclaimable space
-#   ./cleanup-ubuntu.sh --apply         # actually clean (asks before big/risky steps)
-#   ./cleanup-ubuntu.sh --apply --yes   # non-interactive
-#   ./cleanup-ubuntu.sh --apply --free 12G   # clean until 12G is free, then stop
+#   ./reclaim.sh                 # dry-run, show reclaimable space
+#   ./reclaim.sh --apply         # actually clean (asks before big/risky steps)
+#   ./reclaim.sh --apply --yes   # non-interactive
+#   ./reclaim.sh --apply --free 12G   # clean until 12G is free, then stop
 #
 # ADAPTIVE
 #   --free SIZE         clean until SIZE is free on the fs holding $HOME.
@@ -204,7 +204,7 @@ st_assert_ne() { # st_assert_ne <desc> <actual> <unexpected>
 # Build a deterministic fixture tree. Sparse files via truncate, so sizes are
 # exact and creation is instant. Echoes the root.
 st_fixture() {
-  ST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cleanup-selftest.XXXXXX") || return 1
+  ST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/reclaim-selftest.XXXXXX") || return 1
   mkdir -p "$ST_ROOT/.cache/npm" "$ST_ROOT/.config/FakeApp/Cache" \
            "$ST_ROOT/.config/FakeApp/Local Storage" \
            "$ST_ROOT/.config/FakeApp/IndexedDB"
@@ -365,14 +365,14 @@ ST_FAKE_PROCS=""
 running_procs() {
   if [[ -n "$ST_FAKE_PROCS" ]]; then printf '%s\n' "$ST_FAKE_PROCS"; return 0; fi
   ps -eo pid=,args= 2>/dev/null |
-    grep -vE 'cleanup-ubuntu|[[:space:]]grep[[:space:]]' |
+    grep -vE 'reclaim|[[:space:]]grep[[:space:]]' |
     sed 's/^[[:space:]]*//; s/[[:space:]]\{1,\}/\t/'
 }
 
 # True if a cmdline matches any lock regex. Exposed for self-test.
 lock_rx_matches() {
   local cmd="$1" rx
-  [[ "$cmd" == *cleanup-ubuntu* ]] && return 1
+  [[ "$cmd" == *reclaim* ]] && return 1
   for rx in "${LOCK_RX[@]}"; do
     if printf '%s' "$cmd" | grep -qE "$rx"; then return 0; fi
   done
@@ -395,7 +395,7 @@ apply_locks() {
     for entry in "${procs[@]}"; do
       [[ -z "$entry" ]] && continue
       cmd="${entry#*$'\t'}"
-      [[ "$cmd" == *cleanup-ubuntu* ]] && continue
+      [[ "$cmd" == *reclaim* ]] && continue
       if printf '%s' "$cmd" | grep -qE "$rx"; then pid="${entry%%$'\t'*}"; break; fi
     done
     [[ -z "$pid" ]] && continue
@@ -1208,7 +1208,7 @@ sttest_locks() {
   st_assert "unrelated proc does not match" \
     "$(lock_rx_matches '/usr/bin/htop' && echo yes || echo no)" "no"
   st_assert "the cleanup script itself never matches" \
-    "$(lock_rx_matches 'bash cleanup-ubuntu.sh --apply' && echo yes || echo no)" "no"
+    "$(lock_rx_matches 'bash reclaim.sh --apply' && echo yes || echo no)" "no"
 
   # a unit under a locked root must be marked, and one outside must not
   local root; root=$(st_fixture)
@@ -1788,7 +1788,7 @@ main() {
     return 0
   fi
 
-  printf '%s%s cleanup-ubuntu %s  user=%s  host=%s\n' "$C_B" "$C_CYN" "$C_RESET" "$USER" "$(hostname)"
+  printf '%s%s reclaim %s  user=%s  host=%s\n' "$C_B" "$C_CYN" "$C_RESET" "$USER" "$(hostname)"
   if [[ $APPLY -eq 0 ]]; then
     printf '%sDRY-RUN%s — nothing will be deleted. Re-run with %s--apply%s to clean.\n' \
       "$C_YEL" "$C_RESET" "$C_B" "$C_RESET"

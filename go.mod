@@ -1,3 +1,3 @@
-module github.com/mralaminahamed/cleanup-ubuntu
+module github.com/mralaminahamed/reclaim
 
 go 1.24

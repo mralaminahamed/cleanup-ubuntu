@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // Env is the machine the catalog is built against. Injecting it keeps the
@@ -92,6 +92,15 @@ func Build(env Env) *unit.Registry {
 		".cache/google-chrome", ".cache/Google")
 	b.paths("brave-cache", "brave cache", unit.TierColdReload, true, "--browsers", ".cache/BraveSoftware")
 	b.paths("firefox-cache", "firefox cache", unit.TierColdReload, true, "--browsers", ".cache/mozilla")
+
+	// Claude Code scratch state. Jobs and plugin versions are re-fetched or
+	// regenerated; transcripts are not, so history is lossy and separate.
+	b.paths("claude-jobs", "Claude job scratch", unit.TierArtifact, true, "--claude-jobs",
+		".claude/jobs")
+	b.paths("claude-plugins", "Claude plugin cache", unit.TierArtifact, true, "--claude-plugins",
+		".claude/plugins/cache")
+	b.paths("claude-history", "Claude session transcripts", unit.TierLossy, false,
+		"--claude-history", ".claude/projects")
 
 	// Tier 5: may destroy the only copy. Never reached by escalation alone.
 	b.paths("claude-vm", "Claude VM bundles", unit.TierIrreplaceable, false, "--claude-vm",

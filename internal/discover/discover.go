@@ -14,8 +14,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/fsutil"
-	"github.com/mralaminahamed/cleanup-ubuntu/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
 // cacheNames are directory names that hold only regenerable data.
