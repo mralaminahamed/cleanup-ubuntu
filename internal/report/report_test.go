@@ -90,6 +90,46 @@ func TestTextNamesLockedAppsAndTheirPIDs(t *testing.T) {
 	}
 }
 
+func TestFailedUnitsAreNotReportedAsReclaimed(t *testing.T) {
+	// A unit that errored appearing under "Reclaimable" tells the user space
+	// was freed when none was. It has its own section, with the reason.
+	var buf bytes.Buffer
+	Text(&buf, Summary{
+		Failed: []Failure{{
+			Unit:   &unit.Unit{ID: "system-apt", Label: "apt cache clean"},
+			Reason: "needs root: could not acquire root via sudo",
+		}},
+	})
+	out := buf.String()
+	if !strings.Contains(out, "Failed") {
+		t.Errorf("no failed section:\n%s", out)
+	}
+	if !strings.Contains(out, "sudo") {
+		t.Errorf("failure reason not shown:\n%s", out)
+	}
+	if strings.Contains(out, "Reclaimable") {
+		t.Errorf("failed unit rendered under Reclaimable:\n%s", out)
+	}
+}
+
+func TestJSONCarriesFailures(t *testing.T) {
+	var buf bytes.Buffer
+	err := JSON(&buf, Summary{Failed: []Failure{{
+		Unit: &unit.Unit{ID: "system-apt", Label: "apt cache clean"}, Reason: "needs root",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	f, ok := got["failed"].([]any)
+	if !ok || len(f) != 1 {
+		t.Fatalf("failed not reported in JSON: %v", got["failed"])
+	}
+}
+
 func TestTextSuggestsTheFlagForWithheldUnits(t *testing.T) {
 	// Telling the user what was skipped is useless without telling them how to
 	// include it.

@@ -116,6 +116,11 @@ Units in these groups are **never** touched unless you name them:
 Irreversible units additionally require `--allow-lossy`. Set `RECLAIM_NO_OPLOG=1`
 to disable the operations log.
 
+`--system` needs root. `reclaim` asks for it once, up front, via `sudo -v` — so
+you get a single password prompt rather than one per unit — and if elevation is
+declined the system units are reported under **Failed** with the reason, never
+counted as reclaimed.
+
 ## Safety model
 
 - **Dry run by default.** Nothing is deleted and no command runs without

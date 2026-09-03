@@ -34,7 +34,8 @@ func Add(r *unit.Registry, env Env) {
 	}
 	add := func(id, label, command string, tier unit.Tier) {
 		r.Add(&unit.Unit{ID: id, Tier: tier, Reversible: true, Label: label,
-			Kind: unit.KindCmd, Command: command, Flag: "--system", MountHint: "/"})
+			Kind: unit.KindCmd, Command: command, Flag: "--system", MountHint: "/",
+			NeedsRoot: true})
 	}
 
 	if env.Has("apt-get") {
@@ -52,9 +53,12 @@ func Add(r *unit.Registry, env Env) {
 		add("system-journal", "journal vacuum", "sudo journalctl --vacuum-size="+keep, unit.TierPkgCache)
 	}
 	if env.Has("snap") {
+		// "|| exit 1" matters: a while loop is the last stage of this pipeline
+		// and exits 0 even when every removal inside it failed, which made a
+		// failed snap cleanup completely invisible.
 		add("system-snaps", "old snap revisions",
 			`snap list --all | awk '/disabled/{print $1, $3}' | `+
-				`while read -r sn rev; do sudo snap remove "$sn" --revision="$rev"; done`,
+				`while read -r sn rev; do sudo snap remove "$sn" --revision="$rev" || exit 1; done`,
 			unit.TierPkgCache)
 	}
 }

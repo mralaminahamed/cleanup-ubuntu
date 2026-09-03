@@ -212,9 +212,8 @@ func cmdClean(args []string) int {
 	}
 	var total int64
 	var ran []*unit.Unit
+	var failed []report.Failure
 	for _, res := range results {
-		total += res.Freed
-		ran = append(ran, res.Unit)
 		if *apply {
 			entry := oplog.Entry{At: time.Now(), UnitID: res.Unit.ID, Label: res.Unit.Label,
 				Freed: res.Freed, Applied: true}
@@ -223,13 +222,18 @@ func cmdClean(args []string) int {
 			}
 			_ = log.Append(entry)
 		}
+		// A unit that errored is not a unit that reclaimed anything. Counting it
+		// under "Reclaimable" told the user space was freed when none was.
 		if res.Err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", res.Unit.ID, res.Err)
+			failed = append(failed, report.Failure{Unit: res.Unit, Reason: res.Err.Error()})
+			continue
 		}
+		total += res.Freed
+		ran = append(ran, res.Unit)
 	}
 
 	s := report.Summary{
-		Selected: ran, Locked: locked, Withheld: withheld,
+		Selected: ran, Failed: failed, Locked: locked, Withheld: withheld,
 		TotalBytes: total, DryRun: !*apply, StoppedEarly: r.StoppedEarly,
 	}
 	if *jsonOut {

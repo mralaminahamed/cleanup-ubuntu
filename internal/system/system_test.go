@@ -39,6 +39,32 @@ func TestAllSystemUnitsAreOptIn(t *testing.T) {
 	}
 }
 
+func TestSystemUnitsDeclareThatTheyNeedRoot(t *testing.T) {
+	// Without this the runner cannot ask for a password up front, and each unit
+	// fails separately with an unexplained non-zero exit.
+	r := unit.NewRegistry()
+	Add(r, Env{Has: func(string) bool { return true }})
+	for _, u := range r.All() {
+		if !u.NeedsRoot {
+			t.Errorf("unit %q does not declare NeedsRoot", u.ID)
+		}
+	}
+}
+
+func TestSnapRemovalPropagatesFailure(t *testing.T) {
+	// A while loop at the end of a pipeline exits 0 even when every command
+	// inside it failed, so snap removal used to fail completely silently.
+	r := unit.NewRegistry()
+	Add(r, Env{Has: func(string) bool { return true }})
+	u, ok := r.Get("system-snaps")
+	if !ok {
+		t.Fatal("snap unit missing")
+	}
+	if !contains(u.Command, "|| exit") {
+		t.Errorf("snap command swallows failures: %q", u.Command)
+	}
+}
+
 func TestJournalVacuumIsBounded(t *testing.T) {
 	// An unbounded vacuum would delete the entire journal. It must keep a
 	// window of history.

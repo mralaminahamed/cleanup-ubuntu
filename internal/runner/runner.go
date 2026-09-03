@@ -37,9 +37,31 @@ type Runner struct {
 	Avail func(string) (int64, error)
 	// Exec runs a command unit; injectable for the same reason.
 	Exec func(string) error
+	// RootCheck acquires elevated privileges, once per run, before any unit
+	// that needs them. Injectable so the skip path is testable without sudo.
+	RootCheck func() error
 
 	// StoppedEarly records that the target was met before the plan ran out.
 	StoppedEarly bool
+
+	// rootOnce caches the elevation attempt: three system units must not mean
+	// three password prompts.
+	rootChecked bool
+	rootErr     error
+}
+
+// ensureRoot acquires elevation on first use and reuses the outcome after.
+func (r *Runner) ensureRoot() error {
+	if r.rootChecked {
+		return r.rootErr
+	}
+	r.rootChecked = true
+	check := r.RootCheck
+	if check == nil {
+		check = sudoValidate
+	}
+	r.rootErr = check()
+	return r.rootErr
 }
 
 // Run executes units in the order given, re-checking free space after each one
@@ -81,6 +103,13 @@ func (r *Runner) runOne(u *unit.Unit) (int64, error) {
 	if u.Kind == unit.KindCmd {
 		if !r.Apply {
 			return u.Bytes, nil
+		}
+		// Ask for elevation before running, so a missing password is reported
+		// as exactly that rather than as an unexplained non-zero exit.
+		if u.NeedsRoot {
+			if err := r.ensureRoot(); err != nil {
+				return 0, fmt.Errorf("needs root: %w", err)
+			}
 		}
 		run := r.Exec
 		if run == nil {
@@ -145,9 +174,35 @@ func checkSafe(p string) error {
 	return nil
 }
 
+// shellRun executes a unit's command, folding its output into any error.
+// "exit status 1" on its own tells the user nothing they can act on.
 func shellRun(cmd string) error {
-	c := exec.Command("sh", "-c", cmd)
-	c.Stdout = nil
-	c.Stderr = nil
-	return c.Run()
+	out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if msg := firstLine(string(out)); msg != "" {
+		return fmt.Errorf("%w: %s", err, msg)
+	}
+	return err
+}
+
+// sudoValidate refreshes the sudo timestamp, prompting on the terminal if a
+// password is needed. Stdin and stderr are connected precisely so that prompt
+// can be seen and answered.
+func sudoValidate() error {
+	c := exec.Command("sudo", "-v")
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("could not acquire root via sudo: %w", err)
+	}
+	return nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
