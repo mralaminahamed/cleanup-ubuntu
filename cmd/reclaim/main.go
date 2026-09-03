@@ -54,7 +54,7 @@ func main() {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	case "version", "--version":
-		fmt.Println("reclaim", version)
+		fmt.Println("reclaim", resolveVersion(version, moduleVersion()))
 	case "clean":
 		os.Exit(cmdClean(os.Args[2:]))
 	case "status":
