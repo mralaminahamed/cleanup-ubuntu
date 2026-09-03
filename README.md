@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-98-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-99-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -172,7 +172,7 @@ application state, so there it is claimed by *name* against a strict list.
 ## Development
 
 ```bash
-go test ./...          # 98 tests across 13 packages
+go test ./...          # 99 tests across 13 packages
 go test ./... -race
 go vet ./...
 ```
