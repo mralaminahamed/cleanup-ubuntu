@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 662" width="980" height="662" role="img" aria-label="reclaim terminal output">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16293F"/>
+      <stop offset="0.5" stop-color="#0F1B2D"/>
+      <stop offset="1" stop-color="#080F1A"/>
+    </linearGradient>
+    <linearGradient id="solid" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00ADD8"/>
+      <stop offset="1" stop-color="#22D3F5"/>
+    </linearGradient>
+  </defs>
+  <rect width="980" height="662" rx="12" fill="#080F1A"/>
+  <path d="M0 12a12 12 0 0 1 12-12h956a12 12 0 0 1 12 12v30H0z" fill="#0F1B2D"/>
+  <circle cx="26" cy="21" r="6.5" fill="#FF5F57"/>
+  <circle cx="48" cy="21" r="6.5" fill="#FEBC2E"/>
+  <circle cx="70" cy="21" r="6.5" fill="#28C840"/>
+  <text x="490.0" y="26" font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="13" fill="#8FB3C7" text-anchor="middle">reclaim — dry run</text>
+  <g font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="15">
+    <text x="34" y="78" fill="#00ADD8">$ reclaim clean --discover --gradle</text>
+    <text x="34" y="128" fill="#E3B341">DRY-RUN — nothing was deleted. Re-run with --apply to clean.</text>
+    <text x="34" y="178" fill="#22D3F5" font-weight="700">== Reclaimable ==</text>
+    <text x="52" y="203" fill="#8FB3C7">•</text><text x="76" y="203" fill="#E8F4FA">go build cache</text><text x="504" y="203" fill="#22D3F5" text-anchor="end">824.8MiB</text>
+    <text x="52" y="228" fill="#8FB3C7">•</text><text x="76" y="228" fill="#E8F4FA">Claude/Cache</text><text x="504" y="228" fill="#22D3F5" text-anchor="end">553.9MiB</text>
+    <text x="52" y="253" fill="#8FB3C7">•</text><text x="76" y="253" fill="#E8F4FA">yarn berry cache</text><text x="504" y="253" fill="#22D3F5" text-anchor="end">497.0MiB</text>
+    <text x="52" y="278" fill="#8FB3C7">•</text><text x="76" y="278" fill="#E8F4FA">figma-linux/Code Cache</text><text x="504" y="278" fill="#22D3F5" text-anchor="end">125.9MiB</text>
+    <text x="52" y="303" fill="#8FB3C7">•</text><text x="76" y="303" fill="#E8F4FA">Antigravity/CachedData</text><text x="504" y="303" fill="#22D3F5" text-anchor="end">122.1MiB</text>
+    <text x="52" y="328" fill="#8FB3C7">•</text><text x="76" y="328" fill="#E8F4FA">deno cache</text><text x="504" y="328" fill="#22D3F5" text-anchor="end">101.4MiB</text>
+    <text x="52" y="353" fill="#8FB3C7">•</text><text x="76" y="353" fill="#E8F4FA">.cache/bruno-updater</text><text x="504" y="353" fill="#22D3F5" text-anchor="end">99.5MiB</text>
+    <text x="52" y="378" fill="#8FB3C7">•</text><text x="76" y="378" fill="#E8F4FA">.cache/node</text><text x="504" y="378" fill="#22D3F5" text-anchor="end">95.9MiB</text>
+    <text x="34" y="428" fill="#22D3F5" font-weight="700">== Locked by running apps ==</text>
+    <text x="52" y="453" fill="#8FB3C7">•</text><text x="76" y="453" fill="#E8F4FA">JetBrains caches</text><text x="504" y="453" fill="#22D3F5" text-anchor="end">6.2GiB</text><text x="534" y="453" fill="#8FB3C7">held by jetbrains-ide (pid 1155531)</text>
+    <text x="52" y="478" fill="#8FB3C7">•</text><text x="76" y="478" fill="#E8F4FA">chrome cache</text><text x="504" y="478" fill="#22D3F5" text-anchor="end">1.9GiB</text><text x="534" y="478" fill="#8FB3C7">held by chrome (pid 2733868)</text>
+    <text x="34" y="528" fill="#22D3F5" font-weight="700">== Withheld (may destroy information) ==</text>
+    <text x="52" y="553" fill="#8FB3C7">•</text><text x="76" y="553" fill="#E8F4FA">Claude session transcripts</text><text x="504" y="553" fill="#22D3F5" text-anchor="end">1.4GiB</text><text x="534" y="553" fill="#8FB3C7">include with: --claude-history --allow-lossy</text>
+    <text x="34" y="603" fill="#E8F4FA" font-weight="700">would free 7.3GiB</text>
+  </g>
+</svg>

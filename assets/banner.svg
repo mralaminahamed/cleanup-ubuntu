@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="reclaim banner">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16293F"/>
+      <stop offset="0.5" stop-color="#0F1B2D"/>
+      <stop offset="1" stop-color="#080F1A"/>
+    </linearGradient>
+    <linearGradient id="solid" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00ADD8"/>
+      <stop offset="1" stop-color="#22D3F5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="400" fill="url(#plate)"/>
+  <rect x="96.0" y="258.3" width="196.0" height="23.9" rx="12.0" fill="url(#solid)" opacity="1.0"/>
+    <rect x="96.0" y="227.0" width="196.0" height="23.9" rx="12.0" fill="url(#solid)" opacity="0.8"/>
+    <rect x="96.0" y="195.6" width="88.0" height="23.9" rx="12.0" fill="#7DE3FF" opacity="0.94"/>
+    <rect x="197.5" y="196.4" width="31.2" height="31.2" rx="9.3" fill="#7DE3FF" opacity="0.7" transform="rotate(-12 213.1 212.0)"/>
+    <rect x="238.7" y="181.1" width="24.9" height="24.9" rx="7.5" fill="#7DE3FF" opacity="0.48" transform="rotate(18 251.1 193.6)"/>
+    <rect x="272.8" y="161.5" width="18.4" height="18.4" rx="5.5" fill="#7DE3FF" opacity="0.32" transform="rotate(-22 282.0 170.7)"/>
+    <rect x="298.3" y="144.7" width="13.5" height="13.5" rx="4.1" fill="#7DE3FF" opacity="0.19" transform="rotate(12 305.0 151.4)"/>
+  <text x="392" y="176" font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="82" font-weight="700" fill="#E8F4FA" letter-spacing="-1">reclaim</text>
+  <text x="396" y="228" font-family="ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif" font-size="27" fill="#8FB3C7">Process-aware storage reclamation for Ubuntu and Debian.</text>
+  <text x="396" y="272" font-family="ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif" font-size="27" fill="#8FB3C7">Tiered. Dry-run by default. Never deletes what it cannot regenerate.</text>
+  <rect x="396" y="300" width="185" height="42" rx="10" fill="#00ADD8" opacity="0.10"/>
+  <text x="416" y="328" font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="21" fill="#00ADD8">$ reclaim clean</text>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="reclaim icon">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16293F"/>
+      <stop offset="0.5" stop-color="#0F1B2D"/>
+      <stop offset="1" stop-color="#080F1A"/>
+    </linearGradient>
+    <linearGradient id="solid" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00ADD8"/>
+      <stop offset="1" stop-color="#22D3F5"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#plate)"/>
+  <rect x="48.0" y="144.6" width="160.0" height="19.5" rx="9.8" fill="url(#solid)" opacity="1.0"/>
+    <rect x="48.0" y="119.0" width="160.0" height="19.5" rx="9.8" fill="url(#solid)" opacity="0.8"/>
+    <rect x="48.0" y="93.4" width="71.8" height="19.5" rx="9.8" fill="#7DE3FF" opacity="0.94"/>
+    <rect x="130.9" y="94.0" width="25.4" height="25.4" rx="7.6" fill="#7DE3FF" opacity="0.7" transform="rotate(-12 143.6 106.7)"/>
+    <rect x="164.5" y="81.5" width="20.3" height="20.3" rx="6.1" fill="#7DE3FF" opacity="0.48" transform="rotate(18 174.6 91.7)"/>
+    <rect x="192.3" y="65.5" width="15.0" height="15.0" rx="4.5" fill="#7DE3FF" opacity="0.32" transform="rotate(-22 199.8 73.0)"/>
+    <rect x="213.1" y="51.8" width="11.0" height="11.0" rx="3.3" fill="#7DE3FF" opacity="0.19" transform="rotate(12 218.6 57.3)"/>
+</svg>

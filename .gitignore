@@ -6,5 +6,5 @@
 docs/superpowers/
 
 # go build output
-/ubclean
+/reclaim
 /dist/
