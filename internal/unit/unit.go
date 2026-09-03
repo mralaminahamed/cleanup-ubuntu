@@ -59,6 +59,10 @@ type Unit struct {
 	Flag string
 	// MountHint resolves a mount for units that own no path of their own.
 	MountHint string
+	// NeedsRoot marks a unit that cannot run as the invoking user. The runner
+	// asks for elevation once per run rather than letting each unit fail with
+	// an unexplained non-zero exit.
+	NeedsRoot bool
 
 	// Filled in by the probe phase.
 	Bytes int64

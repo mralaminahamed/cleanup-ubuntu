@@ -11,9 +11,17 @@ import (
 	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
+// Failure is a unit that was attempted and did not succeed, with the reason in
+// terms the user can act on.
+type Failure struct {
+	Unit   *unit.Unit
+	Reason string
+}
+
 // Summary is everything one run wants to tell the user.
 type Summary struct {
 	Selected     []*unit.Unit
+	Failed       []Failure
 	Locked       []*unit.Unit
 	Withheld     []*unit.Unit
 	Heavy        []discover.Heavy
@@ -44,6 +52,13 @@ func JSON(w io.Writer, s Summary) error {
 		"locked":            toJSON(s.Locked),
 		"withheld":          toJSON(s.Withheld),
 	}
+	failed := make([]map[string]any, 0, len(s.Failed))
+	for _, f := range s.Failed {
+		failed = append(failed, map[string]any{
+			"id": f.Unit.ID, "label": f.Unit.Label, "reason": f.Reason})
+	}
+	out["failed"] = failed
+
 	heavy := make([]map[string]any, 0, len(s.Heavy))
 	for _, h := range s.Heavy {
 		heavy = append(heavy, map[string]any{"path": h.Path, "bytes": h.Bytes})
@@ -73,6 +88,13 @@ func Text(w io.Writer, s Summary) {
 		fmt.Fprintln(w, "\n== Reclaimable ==")
 		for _, u := range s.Selected {
 			fmt.Fprintf(w, "  • %-38s %10s\n", u.Label, fsutil.Human(u.Bytes))
+		}
+	}
+
+	if len(s.Failed) > 0 {
+		fmt.Fprintln(w, "\n== Failed ==")
+		for _, f := range s.Failed {
+			fmt.Fprintf(w, "  • %-38s %s\n", f.Unit.Label, f.Reason)
 		}
 	}
 
