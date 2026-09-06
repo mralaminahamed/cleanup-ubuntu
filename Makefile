@@ -73,9 +73,15 @@ rpm:
 	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 		go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o $(DIST)/reclaim ./cmd/reclaim
 	@tar -C $(DIST) -czf $$HOME/rpmbuild/SOURCES/reclaim-$(VERSION).tar.gz reclaim
+	@# dist %{nil}: without it the name carries the build host's tag
+	@# (reclaim-0.2.0-1.fc44.x86_64.rpm), which is both wrong for a static
+	@# binary that runs anywhere and a name no installer can predict.
 	@rpmbuild -bb --define "_version $(VERSION)" --define "_rpmdir $(PWD)/$(DIST)" \
-		packaging/reclaim.spec >/dev/null
-	@find $(DIST) -name '*.rpm' -exec echo "  {}" \;
+		--define "dist %{nil}" packaging/reclaim.spec >/dev/null
+	@# rpmbuild files by architecture; flatten so every artifact is in one place.
+	@find $(DIST) -mindepth 2 -name '*.rpm' -exec mv {} $(DIST)/ \;
+	@rmdir $(DIST)/*/ 2>/dev/null || true
+	@ls $(DIST)/*.rpm
 
 clean:
 	rm -rf $(DIST) reclaim
