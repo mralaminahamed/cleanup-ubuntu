@@ -151,9 +151,15 @@ var protected = map[string]bool{
 	"/root": true, "/srv": true, "/proc": true, "/sys": true, "/dev": true,
 }
 
-// checkSafe refuses obviously catastrophic targets: the filesystem root, a
-// top-level system directory, or the user's home itself.
-func checkSafe(p string) error {
+// CheckSafe refuses obviously catastrophic targets: the filesystem root, a
+// top-level system directory, or home itself.
+//
+// It is exported so that anything which can introduce a unit -- a definition
+// loaded from a file, not only the compiled-in catalog -- can refuse the same
+// paths before the unit ever reaches a plan. Sharing the rule rather than
+// restating it is the point: two copies of this would drift, and the copy that
+// drifted would be the one guarding a deletion.
+func CheckSafe(p, home string) error {
 	clean := filepath.Clean(p)
 	if !filepath.IsAbs(clean) {
 		return fmt.Errorf("refusing to delete a relative path %q", p)
@@ -161,10 +167,8 @@ func checkSafe(p string) error {
 	if protected[clean] {
 		return fmt.Errorf("refusing to delete protected path %q", clean)
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if clean == filepath.Clean(home) {
-			return fmt.Errorf("refusing to delete the home directory %q", clean)
-		}
+	if home != "" && clean == filepath.Clean(home) {
+		return fmt.Errorf("refusing to delete the home directory %q", clean)
 	}
 	// Depth two keeps "/home/user" and "/var/lib" safe while allowing the
 	// caches that live below them.
@@ -172,6 +176,15 @@ func checkSafe(p string) error {
 		return fmt.Errorf("refusing to delete top-level path %q", clean)
 	}
 	return nil
+}
+
+// checkSafe applies CheckSafe against the invoking user's home.
+func checkSafe(p string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return CheckSafe(p, home)
 }
 
 // shellRun executes a unit's command, folding its output into any error.

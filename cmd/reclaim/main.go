@@ -26,6 +26,7 @@ import (
 	"github.com/mralaminahamed/reclaim/internal/scan"
 	"github.com/mralaminahamed/reclaim/internal/system"
 	"github.com/mralaminahamed/reclaim/internal/unit"
+	"github.com/mralaminahamed/reclaim/internal/unitfile"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -126,7 +127,14 @@ func cmdClean(args []string) int {
 
 	// Build, measure, then lock. Locking after probing means a locked unit
 	// still reports its size, so the user knows what quitting the app buys.
-	reg := catalog.Build(catalog.DefaultEnv(home))
+	env := catalog.DefaultEnv(home)
+	reg := catalog.Build(env)
+	// After the catalog, so the registry's first-wins rule means a file can add
+	// to the shipped set but never restate it.
+	if err := unitfile.Add(reg, home, unitfile.DefaultFiles(home), env.Has); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	if forced["--system"] {
 		system.Add(reg, system.DefaultEnv())
 	}

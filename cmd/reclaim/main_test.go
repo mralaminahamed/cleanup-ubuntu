@@ -286,3 +286,108 @@ func TestDiscoverOffersTheHugeCacheItHeldBack(t *testing.T) {
 		}
 	}
 }
+
+func writeUnitFile(t *testing.T, home, body string) {
+	t.Helper()
+	dir := filepath.Join(home, ".config", "reclaim")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "units.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnitFileAddsAUnit(t *testing.T) {
+	home := fixtureHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".cache/ccache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUnitFile(t, home, `{"units":[
+		{"id":"ccache","label":"ccache objects","tier":1,"reversible":true,
+		 "paths":[".cache/ccache"]}]}`)
+
+	out, _ := run(t, home, "clean", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "ccache" {
+			return
+		}
+	}
+	t.Fatalf("file-defined unit not planned:\n%s", out)
+}
+
+// A file cannot register a CLI flag, so its opt-in units are named through
+// --with. Without that there would be no way to gate one.
+func TestUnitFileUnitIsOptInThroughWith(t *testing.T) {
+	home := fixtureHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".cache/models"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUnitFile(t, home, `{"units":[
+		{"id":"models","tier":3,"reversible":true,"flag":"--models",
+		 "paths":[".cache/models"]}]}`)
+
+	out, _ := run(t, home, "clean", "--json")
+	for _, id := range planned(t, out) {
+		if id == "models" {
+			t.Fatalf("flagged file unit ran without its flag:\n%s", out)
+		}
+	}
+
+	out, _ = run(t, home, "clean", "--with", "models", "--json")
+	for _, id := range planned(t, out) {
+		if id == "models" {
+			return
+		}
+	}
+	t.Fatalf("--with did not reach the file unit:\n%s", out)
+}
+
+// Reversibility is absolute, and writing a unit down does not lower the gate.
+func TestUnitFileLossyUnitStillNeedsAllowLossy(t *testing.T) {
+	home := fixtureHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".cache/notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUnitFile(t, home, `{"units":[
+		{"id":"notes","tier":1,"reversible":false,"paths":[".cache/notes"]}]}`)
+
+	out, _ := run(t, home, "clean", "--json")
+	for _, id := range planned(t, out) {
+		if id == "notes" {
+			t.Fatalf("irreversible file unit planned without --allow-lossy:\n%s", out)
+		}
+	}
+}
+
+// A file that exists and does not parse means the user wrote something that is
+// not being honoured. Running anyway would clean with a unit set nobody wrote.
+func TestBrokenUnitFileStopsTheRun(t *testing.T) {
+	home := fixtureHome(t)
+	writeUnitFile(t, home, `{"units":[{"id":"x"`)
+
+	out, code := run(t, home, "clean")
+
+	if code == 0 {
+		t.Fatalf("broken unit file did not stop the run:\n%s", out)
+	}
+	if !strings.Contains(out, "units.json") {
+		t.Errorf("error does not name the file:\n%s", out)
+	}
+}
+
+// The shipped definition wins. Otherwise a file could restate "trash" as
+// irreversible tier 0 and smuggle a deletion past the model.
+func TestUnitFileCannotRedefineAShippedUnit(t *testing.T) {
+	home := fixtureHome(t)
+	writeUnitFile(t, home, `{"units":[
+		{"id":"pip-cache","label":"hijacked","tier":5,"reversible":false,
+		 "paths":[".cache/pip"]}]}`)
+
+	out, _ := run(t, home, "clean")
+
+	if strings.Contains(out, "hijacked") {
+		t.Errorf("a file redefined a shipped unit:\n%s", out)
+	}
+}
