@@ -1,0 +1,30 @@
+{
+  "units": [
+    {
+      "id": "ccache",
+      "label": "ccache objects",
+      "tier": 1,
+      "reversible": true,
+      "paths": [".cache/ccache"]
+    },
+
+    {
+      "id": "flatpak-unused",
+      "label": "unused flatpak runtimes",
+      "tier": 1,
+      "reversible": true,
+      "command": "flatpak uninstall --unused -y",
+      "requires": "flatpak",
+      "mount_hint": "/var/lib/flatpak"
+    },
+
+    {
+      "id": "hf-models",
+      "label": "huggingface models",
+      "tier": 3,
+      "reversible": true,
+      "flag": "--models",
+      "paths": [".cache/huggingface"]
+    }
+  ]
+}

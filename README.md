@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-131-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-157-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -122,6 +122,50 @@ you get a single password prompt rather than one per unit — and if elevation i
 declined the system units are reported under **Failed** with the reason, never
 counted as reclaimed.
 
+### Custom units
+
+The catalog covers what this tool ships with an opinion about. Anything else —
+a cache for a tool nobody here uses, a site-specific scratch directory — can be
+declared in `~/.config/reclaim/units.json`, or dropped into
+`/etc/reclaim/units.d/*.json` by a package:
+
+```json
+{
+  "units": [
+    {
+      "id": "ccache",
+      "label": "ccache objects",
+      "tier": 1,
+      "reversible": true,
+      "paths": [".cache/ccache"]
+    },
+    {
+      "id": "flatpak-unused",
+      "label": "unused flatpak runtimes",
+      "tier": 1,
+      "reversible": true,
+      "command": "flatpak uninstall --unused -y",
+      "requires": "flatpak"
+    }
+  ]
+}
+```
+
+`tier` and `reversible` are required. They are the two claims the safety model
+rests on, and defaulting either would let an omission make a promise the author
+never made. Relative paths resolve under `$HOME`; `requires` drops the unit on
+machines without that binary; `flag` makes it opt-in, named as `--with <name>`
+since a file cannot register a CLI flag.
+
+A file **adds** to the catalog and can never restate it — the shipped
+definition of a unit id always wins. Definitions go through the same
+protected-path backstop as everything else, so one aiming at `/`, a top-level
+system directory or `$HOME` is refused at load. `reversible: false` still
+requires `--allow-lossy`: writing a unit down does not lower that gate. A file
+that exists and does not parse stops the run rather than being skipped.
+
+A longer example is in [docs/units.example.json](docs/units.example.json).
+
 ## Safety model
 
 - **Dry run by default.** Nothing is deleted and no command runs without
@@ -165,6 +209,7 @@ internal/lock/       running-application detection
 internal/plan/       tier ceiling and selection
 internal/runner/     execution, with a protected-path backstop
 internal/discover/   caches with no hardcoded rule
+internal/unitfile/   unit definitions loaded from files
 internal/report/     text and JSON output
 internal/oplog/      append-only record of what was deleted
 internal/fsutil/     sizes, mounts and pressure
@@ -186,7 +231,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 131 tests across 13 packages
+go test ./...          # 157 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```
