@@ -33,14 +33,30 @@ jobs:
           make deb  VERSION=${{ steps.v.outputs.version }}
 
       # rpmbuild is not on the runner, and installing it there is slower and
-      # less reproducible than building where rpm already lives.
+      # less reproducible than building where rpm already lives. The build runs
+      # as root inside the container, so it hands ownership back on the way out
+      # -- otherwise everything after this silently cannot touch the result.
       - name: Build .rpm
         run: |
           docker run --rm -v "$PWD:/src" -w /src fedora:latest sh -c '
+            set -e
             dnf install -y rpm-build golang make >/dev/null 2>&1
             make rpm VERSION=${{ steps.v.outputs.version }}
+            chown -R '"$(id -u):$(id -g)"' dist
           '
-          find dist -name '*.rpm' -exec mv {} dist/ \; 2>/dev/null || true
+
+      # A release quietly missing an artifact is worse than a failed one: the
+      # install script asks for a file that is not there and the user finds out.
+      - name: Check every artifact is present
+        run: |
+          for pattern in 'dist/*_amd64.deb' 'dist/*_arm64.deb' \
+                         'dist/*_linux_amd64.tar.gz' 'dist/*_linux_arm64.tar.gz' \
+                         'dist/*.x86_64.rpm'; do
+            # shellcheck disable=SC2086
+            set -- $pattern
+            [ -f "$1" ] || { echo "missing artifact: $pattern"; ls -R dist; exit 1; }
+          done
+          ls -1 dist
 
       - name: Checksums
         run: make checksums
