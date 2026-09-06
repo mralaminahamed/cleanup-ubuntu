@@ -56,10 +56,45 @@ func Add(r *unit.Registry, env Env) {
 			NeedsRoot: true})
 	}
 
-	if env.Has("apt-get") {
-		// Cache clean only. autoremove can pull out kernels and packages the
-		// user still wants, so it is never the default.
-		add("system-apt", "apt cache clean", "sudo apt-get clean", unit.TierNative)
+	addCached := func(id, label, command string, paths ...string) {
+		r.Add(&unit.Unit{ID: id, Tier: unit.TierPkgCache, Reversible: true,
+			Label: label, Kind: unit.KindCmd, Command: command, Flag: "--system",
+			MountHint: "/", NeedsRoot: true, SizePaths: paths})
+	}
+
+	// Every distribution keeps a package cache and every one of them refills it
+	// from the network, so they are all tier 1 and all reversible. Only the
+	// command and the directory differ.
+	//
+	// Each is a cache clean and nothing more. An autoremove decides for itself
+	// what is orphaned, and that set is not something this tool can preview
+	// honestly.
+	switch {
+	case env.Has("apt-get"):
+		addCached("system-apt", "apt cache clean", "sudo apt-get clean",
+			"/var/cache/apt/archives")
+	case env.Has("dnf"):
+		// dnf5 moved the cache; naming both costs nothing and PathBytes
+		// reports 0 for the one that is not there.
+		addCached("system-dnf", "dnf cache clean", "sudo dnf clean all",
+			"/var/cache/dnf", "/var/cache/libdnf5")
+	case env.Has("yum"):
+		// Only when dnf is absent: on a modern Fedora "yum" is a shim for dnf,
+		// and registering both would clean one cache twice and count it twice.
+		addCached("system-yum", "yum cache clean", "sudo yum clean all",
+			"/var/cache/yum")
+	case env.Has("pacman"):
+		// -Sc, never -Scc. -Sc drops packages that are no longer installed;
+		// -Scc drops the cached copy of what *is* installed, which is what a
+		// downgrade needs and the only reason to keep that cache at all.
+		addCached("system-pacman", "pacman cache clean",
+			"sudo pacman -Sc --noconfirm", "/var/cache/pacman/pkg")
+	case env.Has("zypper"):
+		addCached("system-zypper", "zypper cache clean", "sudo zypper clean --all",
+			"/var/cache/zypp")
+	case env.Has("apk"):
+		addCached("system-apk", "apk cache clean", "sudo apk cache clean",
+			"/var/cache/apk")
 	}
 	if env.Has("journalctl") {
 		keep := env.JournalKeep

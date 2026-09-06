@@ -8,8 +8,9 @@
 
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
+[![Distros](https://img.shields.io/badge/distros-deb%20%7C%20rpm%20%7C%20arch%20%7C%20alpine-4C1.svg)](#install)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-264-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-270-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -49,17 +50,42 @@ Nothing is deleted without `--apply`, and `--apply` prompts before it acts.
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/mralaminahamed/reclaim/trunk/install.sh | sh
+```
+
+The script installs a **native package** where one fits the machine — `.deb` on
+Debian and its derivatives, `.rpm` on Fedora, RHEL and openSUSE — so `reclaim`
+can be upgraded and removed by the tools that already manage everything else
+there. Anywhere else it falls back to a static binary in `/usr/local/bin`.
+Checksums are verified, and a missing checksum file is a failure rather than a
+shrug.
+
+It picks by the *package format the machine expects*, not by the distribution's
+name, which is what makes it work on the derivatives too — and there are far
+more of those than there are upstreams.
+
+Or take a package directly from the
+[releases](https://github.com/mralaminahamed/reclaim/releases):
+
+```bash
+sudo dpkg -i reclaim_0.2.0_amd64.deb          # Debian, Ubuntu, Mint, Pop!_OS
+sudo dnf install reclaim-0.2.0-1.x86_64.rpm   # Fedora, RHEL, Rocky, Alma
+sudo zypper install reclaim-0.2.0-1.x86_64.rpm # openSUSE
+```
+
+Arch has a [PKGBUILD](packaging/PKGBUILD). With Go already installed:
+
+```bash
 go install github.com/mralaminahamed/reclaim/cmd/reclaim@latest
 ```
 
-Or build from a checkout:
-
-```bash
-go build -o reclaim ./cmd/reclaim
-```
+Or build from a checkout — `make build`, or `make dist deb rpm` to produce the
+packages yourself.
 
 There are no third-party dependencies. For a tool that deletes files as root, an
-empty `require` block is a feature rather than an accident.
+empty `require` block is a feature rather than an accident. The published
+binaries are static for the same reason: this runs on a machine that is having
+a bad day, and a dynamic link to a libc on the same failing disk is a bad bet.
 
 ### Shell completion
 
@@ -211,6 +237,17 @@ be previewed honestly. Two kernels always survive — the running one and the
 newest — and the dry run names every package it would purge, because a byte
 count is not something anyone can consent to for a kernel removal.
 
+`--system` covers whichever package manager the machine has — `apt`, `dnf`,
+`yum`, `pacman`, `zypper` or `apk` — plus the journal and crash artifacts. Each
+is a cache clean and nothing more; none of them runs an autoremove, because
+that decides for itself what is orphaned and the result cannot be previewed
+honestly.
+
+Kernels stay Debian-only on purpose, and not because the others are harder.
+`dnf` enforces `installonly_limit` itself and Arch ships one `linux` package
+that is replaced rather than accumulated, so on those systems there is nothing
+to collect and a kernel unit would be inventing work.
+
 `--system` needs root. `reclaim` asks for it once, up front, via `sudo -v` — so
 you get a single password prompt rather than one per unit — and if elevation is
 declined the system units are reported under **Failed** with the reason, never
@@ -354,7 +391,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 264 tests across 16 packages
+go test ./...          # 270 tests across 16 packages
 go test ./... -race
 go vet ./...
 ```
@@ -371,7 +408,8 @@ python3 assets/generate.py && bash assets/render.sh
 
 ## Status
 
-Linux only today. macOS support is planned and tracked in
+Tested on Debian, Ubuntu, Fedora, Arch, openSUSE and Alpine — CI runs the binary
+on each of them. macOS support is planned and tracked in
 [#1](https://github.com/mralaminahamed/reclaim/issues/1).
 
 Note that `GOOS=darwin go build` currently *succeeds*, which is misleading: the

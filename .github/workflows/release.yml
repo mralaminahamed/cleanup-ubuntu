@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # A release that fails its own test suite is worse than no release.
+      - name: Test
+        run: make test
+
+      - name: Version
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build tarballs and .deb
+        run: |
+          make dist VERSION=${{ steps.v.outputs.version }}
+          make deb  VERSION=${{ steps.v.outputs.version }}
+
+      # rpmbuild is not on the runner, and installing it there is slower and
+      # less reproducible than building where rpm already lives.
+      - name: Build .rpm
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src fedora:latest sh -c '
+            dnf install -y rpm-build golang make >/dev/null 2>&1
+            make rpm VERSION=${{ steps.v.outputs.version }}
+          '
+          find dist -name '*.rpm' -exec mv {} dist/ \; 2>/dev/null || true
+
+      - name: Checksums
+        run: make checksums
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
+          generate_release_notes: true

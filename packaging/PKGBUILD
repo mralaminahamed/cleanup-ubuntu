@@ -1,0 +1,37 @@
+# Maintainer: Al Amin Ahamed <n.mukto@codexpert.io>
+pkgname=reclaim
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Reclaim disk space without losing anything you cannot get back"
+arch=('x86_64' 'aarch64')
+url="https://github.com/mralaminahamed/reclaim"
+license=('MIT')
+makedepends=('go' 'git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  # Static: this is a tool for a machine that is having a bad day, and a
+  # dynamic link to a libc on the same failing disk is a bad bet.
+  CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X main.version=$pkgver" \
+    -o reclaim ./cmd/reclaim
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm0755 reclaim "$pkgdir/usr/bin/reclaim"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  ./reclaim completion bash | install -Dm0644 /dev/stdin \
+    "$pkgdir/usr/share/bash-completion/completions/reclaim"
+  ./reclaim completion zsh | install -Dm0644 /dev/stdin \
+    "$pkgdir/usr/share/zsh/site-functions/_reclaim"
+  ./reclaim completion fish | install -Dm0644 /dev/stdin \
+    "$pkgdir/usr/share/fish/vendor_completions.d/reclaim.fish"
+}

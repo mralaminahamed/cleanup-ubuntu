@@ -2,6 +2,7 @@ package fsutil
 
 import (
 	"bufio"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -75,7 +76,14 @@ func Mounts() ([]Mount, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return parseMounts(f)
+}
 
+// parseMounts reads mount table lines. Split out from Mounts so the filtering
+// can be tested against a table this machine does not have -- a bind-mounted
+// file only occurs in a container, and that is exactly where it was found.
+func parseMounts(r io.Reader) ([]Mount, error) {
+	f := r
 	seen := map[string]bool{}
 	var out []Mount
 	sc := bufio.NewScanner(f)
@@ -89,6 +97,13 @@ func Mounts() ([]Mount, error) {
 			continue
 		}
 		if seen[path] {
+			continue
+		}
+		// A bind-mounted file has a real filesystem type, so nothing above
+		// catches it, and statfs happily reports the size of the filesystem
+		// underneath it. In a container that puts /etc/hosts and
+		// /etc/resolv.conf in the report as though each were a disk.
+		if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
 			continue
 		}
 		var st syscall.Statfs_t
