@@ -97,6 +97,7 @@ func cmdClean(args []string) int {
 		yes        = fs.Bool("yes", false, "do not prompt before applying")
 		free       = fs.String("free", "", "clean until SIZE is free, then stop (e.g. 12G)")
 		auto       = fs.Bool("auto", false, "pick a target from current disk pressure")
+		below      = fs.String("below", "", "do nothing unless free space is under SIZE")
 		tier       = fs.Int("tier", int(unit.TierIrreplaceable), "highest tier to run without an opt-in flag")
 		allowLossy = fs.Bool("allow-lossy", false, "permit units that destroy information")
 		doDiscover = fs.Bool("discover", false, "also claim caches with no hardcoded rule")
@@ -159,6 +160,32 @@ func cmdClean(args []string) int {
 	})
 	for _, f := range flags {
 		forced["--"+strings.TrimPrefix(f, "--")] = true
+	}
+
+	// The threshold guard, before anything is built or measured. A timer that
+	// fires hourly should almost always do nothing, and doing nothing should
+	// cost nothing -- this is what makes a scheduled run cheap enough to
+	// schedule often.
+	if *below != "" {
+		want, err := fsutil.ParseSize(*below)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		watched := home
+		if *auto {
+			if mounts, err := fsutil.Mounts(); err == nil && len(mounts) > 0 {
+				watched = fsutil.Worst(mounts).Path
+			}
+		}
+		// An unreadable filesystem is not evidence that there is room. The
+		// guard only ever stops a run on a positive answer.
+		avail, err := fsutil.AvailBytes(watched)
+		if err == nil && avail >= want {
+			fmt.Printf("%s has %s free, at or above the %s threshold — nothing to do\n",
+				watched, fsutil.Human(avail), fsutil.Human(want))
+			return 0
+		}
 	}
 
 	// Build, measure, then lock. Locking after probing means a locked unit

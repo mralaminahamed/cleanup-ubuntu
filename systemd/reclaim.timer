@@ -1,0 +1,14 @@
+[Unit]
+Description=Reclaim disk space periodically
+Documentation=https://github.com/mralaminahamed/reclaim
+
+[Timer]
+OnCalendar=daily
+# Spreads the run so a fleet does not wake at the same second.
+RandomizedDelaySec=30m
+# Runs after a missed window rather than skipping it, which matters on a laptop
+# that is asleep at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

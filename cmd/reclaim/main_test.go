@@ -536,3 +536,56 @@ func TestConfigTierLowersTheCeiling(t *testing.T) {
 		}
 	}
 }
+
+// A timer that fires hourly should almost always do nothing. --below is the
+// guard that makes that cheap: if the disk is not under pressure the run stops
+// before it builds a catalog, let alone probes one.
+func TestBelowStopsTheRunWhenThereIsPlentyFree(t *testing.T) {
+	home := fixtureHome(t)
+
+	out, code := run(t, home, "clean", "--below", "1K")
+
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+	if strings.Contains(out, "Reclaimable") {
+		t.Errorf("the run went ahead despite free space above the threshold:\n%s", out)
+	}
+	if !strings.Contains(out, "1.0KiB") {
+		t.Errorf("the output does not say what threshold was not met:\n%s", out)
+	}
+}
+
+func TestBelowLetsTheRunProceedWhenSpaceIsShort(t *testing.T) {
+	home := fixtureHome(t)
+
+	out, code := run(t, home, "clean", "--below", "999999T")
+
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "Reclaimable") {
+		t.Errorf("the run was skipped though free space is under the threshold:\n%s", out)
+	}
+}
+
+// The guard has to hold with --apply, which is the only way it is ever used.
+func TestBelowDeletesNothingWhenNotMet(t *testing.T) {
+	home := fixtureHome(t)
+	blob := filepath.Join(home, ".cache/pip/blob")
+
+	out, code := run(t, home, "clean", "--below", "1K", "--apply", "--yes")
+
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+	if _, err := os.Stat(blob); err != nil {
+		t.Fatalf("a skipped run deleted something: %v", err)
+	}
+}
+
+func TestBadBelowSizeExitsNonZero(t *testing.T) {
+	if _, code := run(t, fixtureHome(t), "clean", "--below", "banana"); code == 0 {
+		t.Fatal("a bad --below size was accepted")
+	}
+}

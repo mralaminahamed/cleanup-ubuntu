@@ -28,14 +28,14 @@ _reclaim() {
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
             return
             ;;
-        --free|--tier|--workers|--sites-idle|--sites-root|--min|-n)
+        --free|--below|--tier|--workers|--sites-idle|--sites-root|--min|-n)
             return
             ;;
     esac
 
     case "${COMP_WORDS[1]}" in
         clean)
-            COMPREPLY=( $(compgen -W "--apply --yes --free --auto --tier --allow-lossy \
+            COMPREPLY=( $(compgen -W "--apply --yes --free --auto --below --tier --allow-lossy \
                 --discover --json --workers --sites-idle --sites-root --only --exclude --with \
                 --gradle --maven --jetbrains --browsers --playwright --docker --docker-volumes \
                 --claude-vm --system --claude-jobs --claude-plugins --claude-history \

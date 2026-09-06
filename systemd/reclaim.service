@@ -1,0 +1,24 @@
+[Unit]
+Description=Reclaim disk space
+Documentation=https://github.com/mralaminahamed/reclaim
+
+[Service]
+Type=oneshot
+# --below makes this a no-op unless the disk is actually under pressure, so the
+# timer can fire often and cost nothing most of the time.
+#
+# --auto reads the pressure it finds and picks a tier from it: a comfortable
+# disk earns only the free tiers, a critical one earns a cold reload.
+#
+# Deliberately absent: --allow-lossy, and every opt-in group flag. Whatever this
+# does, it does at 03:00 with nobody reading the output, and the default tier
+# ceiling is the right amount of ambition for that.
+ExecStart=/usr/local/bin/reclaim clean --below 20G --auto --apply --yes
+
+# The oplog and JSON output make a run auditable afterwards, which is most of
+# what it takes to trust one.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

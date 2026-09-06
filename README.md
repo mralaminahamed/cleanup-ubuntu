@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-238-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-242-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -92,12 +92,40 @@ reclaim completion bash     # shell completion script
 ```bash
 reclaim clean --free 12G    # clean until 12G is free, then stop
 reclaim clean --auto        # read disk pressure and pick a target
+reclaim clean --below 20G   # do nothing unless free space is under 20G
 reclaim clean --tier 2      # never escalate past tier 2
 ```
 
 `--auto` finds the most pressured filesystem and lets how full it is decide how
 hard to try. A comfortable disk gets only the free tiers; a critical one earns a
 cold reload.
+
+### Scheduling
+
+`--below` makes a run a no-op unless the disk is actually under pressure, and
+it decides that before building a catalog or probing anything — so a timer can
+fire often and cost nothing most of the time:
+
+```bash
+reclaim clean --below 20G --auto --apply --yes
+```
+
+Unit files are in [systemd/](systemd/):
+
+```bash
+sudo cp systemd/reclaim.* /etc/systemd/system/
+sudo systemctl enable --now reclaim.timer
+```
+
+The shipped service passes no opt-in group flags and no `--allow-lossy`.
+Whatever it does, it does at 03:00 with nobody reading the output, and the
+default tier ceiling is the right amount of ambition for that. `--json` and the
+operations log make a run auditable afterwards.
+
+There is no `watch` daemon on purpose. A timer plus `--below` is the same
+capability without a process to supervise, and systemd already handles the
+parts a daemon would have to reimplement badly: persistence across reboot,
+missed windows, and logging.
 
 ### Scope
 
@@ -297,7 +325,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 238 tests across 15 packages
+go test ./...          # 242 tests across 15 packages
 go test ./... -race
 go vet ./...
 ```
