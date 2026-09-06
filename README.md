@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-213-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-218-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -114,11 +114,19 @@ Units in these groups are **never** touched unless you name them:
 | `--models` | huggingface, torch, whisper and LM Studio model stores |
 | `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
 | `--docker`, `--docker-volumes` | Docker prune — volumes may hold databases |
-| `--sites-idle N` | dependency trees of projects idle for N days |
+| `--sites-idle N` | dependency and build trees of projects idle for N days |
 | `--heavy` | discovered caches over 1GiB (see below) |
 
 Irreversible units additionally require `--allow-lossy`. Set `RECLAIM_NO_OPLOG=1`
 to disable the operations log.
+
+`--sites-idle` knows around fifteen project shapes — Cargo, Maven, Gradle,
+Python venvs, Next, Elixir, CocoaPods, Terraform, .NET, Zig, Dart and the
+Node/PHP pair it started with. Each dependency directory is paired with a
+manifest that proves what produced it, because `build`, `target`, `obj` and
+`bin` are ordinary words and a directory of that name with nothing beside it is
+somebody's source. Idleness is judged from a project's own files, never from
+its build output.
 
 Model stores are tier 3 rather than tier 1 because "comes back" and "comes back
 for free" are different claims: every file re-downloads, over hours, often
@@ -253,7 +261,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 213 tests across 14 packages
+go test ./...          # 218 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```

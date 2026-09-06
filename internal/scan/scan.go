@@ -14,11 +14,80 @@ import (
 	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
-// depDirs are dependency trees, paired with the manifest that proves the
-// directory really is a project of that kind.
-var depDirs = []struct{ dir, manifest string }{
-	{"node_modules", "package.json"},
-	{"vendor", "composer.json"},
+// depDirs are dependency and build trees, each paired with the manifests that
+// prove the directory really is a project of that kind.
+//
+// The pairing carries far more weight here than it did for node_modules.
+// "build", "target", "obj" and "bin" are ordinary English words, and a
+// directory of that name with nothing beside it to explain what produced it is
+// somebody's source. No entry may be added without a manifest.
+//
+// A manifest may be a filepath.Match pattern: there is no fixed name for a
+// terraform config or a .NET project file.
+//
+// "dist" is deliberately absent. Unlike ".next" or "_build" it carries no
+// framework's meaning, and plenty of published packages commit one.
+var depDirs = []struct {
+	dir       string
+	manifests []string
+}{
+	{"node_modules", []string{"package.json"}},
+	{"vendor", []string{"composer.json"}},
+	{"target", []string{"Cargo.toml", "pom.xml"}},
+	{"build", []string{"build.gradle", "build.gradle.kts", "pubspec.yaml"}},
+	{".venv", []string{"pyproject.toml", "requirements.txt", "setup.py"}},
+	{"venv", []string{"pyproject.toml", "requirements.txt", "setup.py"}},
+	{".next", []string{"package.json"}},
+	{".nuxt", []string{"package.json"}},
+	{".turbo", []string{"package.json"}},
+	{"_build", []string{"mix.exs"}},
+	{"deps", []string{"mix.exs"}},
+	{".terraform", []string{"*.tf"}},
+	{"Pods", []string{"Podfile"}},
+	{"obj", []string{"*.csproj", "*.fsproj", "*.sln"}},
+	{"bin", []string{"*.csproj", "*.fsproj", "*.sln"}},
+	{"zig-cache", []string{"build.zig"}},
+	{".zig-cache", []string{"build.zig"}},
+	{"zig-out", []string{"build.zig"}},
+	{".dart_tool", []string{"pubspec.yaml"}},
+}
+
+// artifactDirs is every directory name in depDirs, for the idleness walk to
+// skip. Built from the one table so the two cannot drift: a build output
+// counted as a source makes a dormant project look busy, and it is then never
+// offered.
+var artifactDirs = func() map[string]bool {
+	m := map[string]bool{".git": true}
+	for _, d := range depDirs {
+		m[d.dir] = true
+	}
+	return m
+}()
+
+// hasManifest reports whether any of the manifests is present in proj. A name
+// containing a glob metacharacter is matched against the directory listing.
+func hasManifest(proj string, manifests []string) bool {
+	for _, m := range manifests {
+		if !strings.ContainsAny(m, "*?[") {
+			if _, err := os.Stat(filepath.Join(proj, m)); err == nil {
+				return true
+			}
+			continue
+		}
+		entries, err := os.ReadDir(proj)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if ok, _ := filepath.Match(m, e.Name()); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IdleProjects registers dependency trees belonging to projects whose sources
@@ -55,7 +124,7 @@ func IdleProjects(r *unit.Registry, root string, idleDays int) {
 			}
 			// The manifest is what proves this is a project. A bare
 			// node_modules with nothing beside it may be something else.
-			if _, err := os.Stat(filepath.Join(proj, d.manifest)); err != nil {
+			if !hasManifest(proj, d.manifests) {
 				continue
 			}
 			r.Add(&unit.Unit{
@@ -80,8 +149,7 @@ func newestSource(proj string) time.Time {
 			return nil //nolint:nilerr
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "vendor":
+			if artifactDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
