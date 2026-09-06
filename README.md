@@ -10,7 +10,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Distros](https://img.shields.io/badge/distros-deb%20%7C%20rpm%20%7C%20arch%20%7C%20alpine-4C1.svg)](#install)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-271-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-286-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -393,7 +393,7 @@ than deleting it unasked.
 
 ```bash
 make test              # go test ./... and go vet ./...
-go test ./... -race    # 271 tests across 16 packages
+go test ./... -race    # 286 tests across 16 packages
 make dist deb rpm      # release artifacts
 ```
 

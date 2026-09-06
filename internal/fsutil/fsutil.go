@@ -111,8 +111,11 @@ func AvailBytes(path string) (int64, error) {
 	return int64(st.Bavail) * int64(st.Bsize), nil
 }
 
-// MountOf returns the mount point of the filesystem holding path, by walking up
-// until the device number changes.
+// MountOf returns the mount point of the filesystem holding path.
+//
+// How that is answered differs by platform, and getting it wrong is not
+// cosmetic: this is what --auto and --free aim at, so a wrong answer means a
+// run with no target.
 func MountOf(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -131,19 +134,7 @@ func MountOf(path string) string {
 		abs = parent
 	}
 
-	dev, err := deviceOf(abs)
-	if err != nil {
-		return "/"
-	}
-	for abs != "/" {
-		parent := filepath.Dir(abs)
-		pdev, err := deviceOf(parent)
-		if err != nil || pdev != dev {
-			return abs
-		}
-		abs = parent
-	}
-	return "/"
+	return mountPointOf(abs)
 }
 
 func deviceOf(path string) (uint64, error) {

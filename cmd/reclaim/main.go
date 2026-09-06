@@ -89,7 +89,7 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 // honoured, or honoured under a name nothing defines.
 var optInFlags = []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
 	"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
-	"claude-history", "heavy", "flatpak", "kernels", "models"}
+	"claude-history", "heavy", "flatpak", "kernels", "models", "xcode", "simulators"}
 
 func cmdClean(args []string) int {
 	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
@@ -214,11 +214,8 @@ func cmdClean(args []string) int {
 		scan.IdleProjects(reg, root, *sitesIdle)
 	}
 	if *doDiscover {
-		discover.XDGCaches(reg, filepath.Join(home, ".cache"))
-		discover.NestedCaches(reg, []string{
-			filepath.Join(home, ".config"),
-			filepath.Join(home, ".local", "share"),
-		})
+		discover.XDGCaches(reg, discover.CacheRoot(home))
+		discover.NestedCaches(reg, discover.NestedRoots(home))
 	}
 	probe.All(reg, *workers)
 	// A discovered unit was claimed for where it sits, so its tier is an

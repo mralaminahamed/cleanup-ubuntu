@@ -47,6 +47,8 @@ complete -c reclaim -n '__fish_seen_subcommand_from clean' -l heavy -d 'opt in t
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l flatpak -d 'opt in to flatpak units'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l kernels -d 'opt in to superseded kernels'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l models -d 'opt in to model stores'
+complete -c reclaim -n '__fish_seen_subcommand_from clean' -l xcode -d 'opt in to Xcode state'
+complete -c reclaim -n '__fish_seen_subcommand_from clean' -l simulators -d 'opt in to simulator devices'
 
 complete -c reclaim -n '__fish_seen_subcommand_from analyze' -l min -r -d 'minimum size to report'
 complete -c reclaim -n '__fish_seen_subcommand_from analyze' -l installers -d 'also report stale downloads'

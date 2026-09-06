@@ -48,29 +48,47 @@ func Build(env Env) *unit.Registry {
 	b.cmd("composer-native", "composer clear-cache", "composer", "composer clear-cache")
 	b.cmd("pip-native", "pip cache purge", "pip", "pip cache purge")
 	b.cmd("uv-native", "uv cache clean", "uv", "uv cache clean")
+	// --prune=all discards every cached download rather than only those older
+	// than the default 120 days. All of them are re-downloadable, which is the
+	// whole distinction this tool draws.
+	b.cmdAt("brew-native", "brew cleanup", "brew", "brew cleanup --prune=all", unit.TierPkgCache)
 
 	b.paths("thumbnails", "thumbnails", unit.TierNative, true, "", ".cache/thumbnails")
 	b.paths("trash", "Trash", unit.TierNative, true, "",
 		".local/share/Trash/files", ".local/share/Trash/info")
 
 	// Tier 1: package-manager cache leftovers, re-downloaded on demand.
+	//
+	// Several are named twice, once per platform: macOS tools cache under
+	// ~/Library/Caches rather than ~/.cache. One unit rather than two, because
+	// only the location differs -- the tier and the reversibility are the same
+	// claim about the same thing, and b.paths keeps only the paths that exist,
+	// so the wrong one never registers.
 	b.paths("npm-cacache", "npm _cacache", unit.TierPkgCache, true, "", ".npm/_cacache")
 	b.paths("npm-npx", "npm _npx", unit.TierPkgCache, true, "", ".npm/_npx")
 	b.paths("npm-logs", "npm _logs", unit.TierPkgCache, true, "", ".npm/_logs")
-	b.paths("yarn-classic", "yarn (classic)", unit.TierPkgCache, true, "", ".cache/yarn")
+	b.paths("yarn-classic", "yarn (classic)", unit.TierPkgCache, true, "",
+		".cache/yarn", "Library/Caches/Yarn")
 	b.paths("yarn-berry", "yarn berry cache", unit.TierPkgCache, true, "", ".yarn/berry/cache")
-	b.paths("pnpm-cache", "pnpm cache", unit.TierPkgCache, true, "", ".cache/pnpm")
+	b.paths("pnpm-cache", "pnpm cache", unit.TierPkgCache, true, "",
+		".cache/pnpm", "Library/Caches/pnpm")
 	b.paths("pnpm-store", "pnpm store", unit.TierPkgCache, true, "", ".local/share/pnpm/store")
 	b.paths("bun-cache", "bun cache", unit.TierPkgCache, true, "", ".bun/install/cache")
-	b.paths("node-gyp", "node-gyp headers", unit.TierPkgCache, true, "", ".cache/node-gyp")
-	b.paths("go-build", "go build cache", unit.TierPkgCache, true, "", ".cache/go-build")
+	b.paths("node-gyp", "node-gyp headers", unit.TierPkgCache, true, "",
+		".cache/node-gyp", "Library/Caches/node-gyp")
+	b.paths("go-build", "go build cache", unit.TierPkgCache, true, "",
+		".cache/go-build", "Library/Caches/go-build")
 	b.paths("go-modcache", "go module cache", unit.TierPkgCache, true, "", "go/pkg/mod")
-	b.paths("composer-cache", "composer cache", unit.TierPkgCache, true, "", ".cache/composer")
-	b.paths("uv-cache", "uv cache", unit.TierPkgCache, true, "", ".cache/uv")
-	b.paths("pip-cache", "pip cache", unit.TierPkgCache, true, "", ".cache/pip")
+	b.paths("composer-cache", "composer cache", unit.TierPkgCache, true, "",
+		".cache/composer", "Library/Caches/composer")
+	b.paths("uv-cache", "uv cache", unit.TierPkgCache, true, "",
+		".cache/uv", "Library/Caches/uv")
+	b.paths("pip-cache", "pip cache", unit.TierPkgCache, true, "",
+		".cache/pip", "Library/Caches/pip")
 	b.paths("cargo-cache", "cargo registry", unit.TierPkgCache, true, "",
 		".cargo/registry/cache", ".cargo/registry/src")
-	b.paths("deno-cache", "deno cache", unit.TierPkgCache, true, "", ".deno")
+	b.paths("deno-cache", "deno cache", unit.TierPkgCache, true, "",
+		".deno", "Library/Caches/deno")
 	b.paths("nuget-cache", "nuget packages", unit.TierPkgCache, true, "", ".nuget/packages")
 	b.paths("gem-cache", "gem cache", unit.TierPkgCache, true, "", ".gem")
 	b.paths("gradle-daemon", "gradle daemon logs", unit.TierPkgCache, true, "", ".gradle/daemon")
@@ -103,13 +121,51 @@ func Build(env Env) *unit.Registry {
 	b.paths("lmstudio-models", "LM Studio models", unit.TierColdReload, true, "--models",
 		".lmstudio/models")
 
+	// macOS. Registered from this same table rather than a platform file: the
+	// paths simply do not exist on Linux, so nothing registers there, and the
+	// tier and reversibility decisions -- the part that matters -- are written
+	// down once instead of once per platform.
+	//
+	// ~/Library/Caches is the ~/.cache analogue and the same "regenerable by
+	// location" argument applies. ~/Library/Application Support is not: it
+	// holds application state, and nothing here may claim it.
+	b.paths("homebrew-cache", "homebrew downloads", unit.TierPkgCache, true, "",
+		"Library/Caches/Homebrew")
+	b.paths("cocoapods-cache", "cocoapods cache", unit.TierPkgCache, true, "",
+		"Library/Caches/CocoaPods")
+	b.paths("swiftpm-cache", "swift package cache", unit.TierPkgCache, true, "",
+		"Library/Caches/org.swift.swiftpm")
+	b.paths("xcode-cache", "Xcode cache", unit.TierArtifact, true, "",
+		"Library/Caches/com.apple.dt.Xcode")
+	b.paths("coresimulator-caches", "simulator caches", unit.TierArtifact, true, "",
+		"Library/Developer/CoreSimulator/Caches")
+
+	// Xcode's own state is opt-in for the reason JetBrains is: deleting it
+	// under a running IDE breaks the session it is in the middle of, and lock
+	// detection has no rule for Xcode yet.
+	b.paths("xcode-derived-data", "Xcode derived data", unit.TierColdReload, true, "--xcode",
+		"Library/Developer/Xcode/DerivedData")
+	b.paths("ios-device-support", "iOS device support", unit.TierColdReload, true, "--xcode",
+		"Library/Developer/Xcode/iOS DeviceSupport")
+
+	// An archive is the built, signed artifact of a shipped release. Xcode
+	// cannot recreate one from anything left on disk, which is exactly why
+	// people keep them.
+	b.paths("xcode-archives", "Xcode archives", unit.TierIrreplaceable, false, "--xcode",
+		"Library/Developer/Xcode/Archives")
+
+	// A simulator device holds installed apps and their data, not a cache.
+	// Wiping it is closer to erasing a phone than to clearing a directory.
+	b.paths("coresimulator-devices", "simulator devices", unit.TierLossy, false, "--simulators",
+		"Library/Developer/CoreSimulator/Devices")
+
 	// Tier 2: bigger regenerable artefacts.
 	b.paths("playwright", "playwright browsers", unit.TierArtifact, true, "--playwright",
-		".cache/ms-playwright")
+		".cache/ms-playwright", "Library/Caches/ms-playwright")
 
 	// Tier 3: costs a reindex or a full cold re-download on next use.
 	b.paths("jetbrains-cache", "JetBrains caches", unit.TierColdReload, true, "--jetbrains",
-		".cache/JetBrains")
+		".cache/JetBrains", "Library/Caches/JetBrains")
 	b.paths("gradle-caches", "gradle caches", unit.TierColdReload, true, "--gradle", ".gradle/caches")
 	b.paths("gradle-wrapper", "gradle wrapper", unit.TierColdReload, true, "--gradle", ".gradle/wrapper")
 	b.paths("maven-repo", "maven repository", unit.TierColdReload, true, "--maven", ".m2/repository")

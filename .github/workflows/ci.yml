@@ -23,6 +23,27 @@ jobs:
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi
 
+  # macOS cannot be tested from a Linux development machine, so this job is the
+  # only thing that actually executes the darwin code paths -- the process table
+  # reader and getfsstat. Compiling for darwin proves nothing about either.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go build ./...
+      - run: go test ./... -race
+      - run: go vet ./...
+      - name: Run it
+        run: |
+          go build -o reclaim ./cmd/reclaim
+          ./reclaim version
+          ./reclaim status
+          ./reclaim clean --json > /tmp/out.json
+          python3 -c "import json;json.load(open('/tmp/out.json'))"
+
   # The tool is meant to run on more than Debian, and the only way that claim
   # stays true is to keep checking it somewhere that is not Debian.
   distros:

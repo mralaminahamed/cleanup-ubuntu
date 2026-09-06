@@ -21,7 +21,7 @@ _reclaim() {
             return
             ;;
         --with)
-            COMPREPLY=( $(compgen -W "gradle maven jetbrains browsers playwright docker docker-volumes claude-vm system claude-jobs claude-plugins claude-history heavy flatpak kernels models" -- "$cur") )
+            COMPREPLY=( $(compgen -W "gradle maven jetbrains browsers playwright docker docker-volumes claude-vm system claude-jobs claude-plugins claude-history heavy flatpak kernels models xcode simulators" -- "$cur") )
             return
             ;;
         completion)
@@ -39,7 +39,7 @@ _reclaim() {
                 --discover --json --workers --sites-idle --sites-root --only --exclude --with \
                 --gradle --maven --jetbrains --browsers --playwright --docker --docker-volumes \
                 --claude-vm --system --claude-jobs --claude-plugins --claude-history \
-                --heavy --flatpak --kernels --models" -- "$cur") )
+                --heavy --flatpak --kernels --models --xcode --simulators" -- "$cur") )
             ;;
         analyze)
             COMPREPLY=( $(compgen -W "--min -n --installers --older --json" -- "$cur") )

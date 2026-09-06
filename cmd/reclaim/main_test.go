@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mralaminahamed/reclaim/internal/discover"
 )
 
 var bin string
@@ -30,11 +32,16 @@ func TestMain(m *testing.M) {
 func fixtureHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	for _, d := range []string{".npm/_cacache", ".cache/pip", ".cache/randomtool"} {
-		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
+	cache := discover.CacheRoot(home)
+	for _, d := range []string{
+		filepath.Join(home, ".npm/_cacache"),
+		filepath.Join(cache, "pip"),
+		filepath.Join(cache, "randomtool"),
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(home, d, "blob"), make([]byte, 4096), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(d, "blob"), make([]byte, 4096), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -196,7 +203,7 @@ func planned(t *testing.T, out string) []string {
 // exactly what the promotion pass reads.
 func hugeCache(t *testing.T, home, name string) {
 	t.Helper()
-	dir := filepath.Join(home, ".cache", name)
+	dir := filepath.Join(discover.CacheRoot(home), name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +308,7 @@ func writeUnitFile(t *testing.T, home, body string) {
 
 func TestUnitFileAddsAUnit(t *testing.T) {
 	home := fixtureHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".cache/ccache"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".cache", "ccache"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeUnitFile(t, home, `{"units":[
@@ -322,7 +329,7 @@ func TestUnitFileAddsAUnit(t *testing.T) {
 // --with. Without that there would be no way to gate one.
 func TestUnitFileUnitIsOptInThroughWith(t *testing.T) {
 	home := fixtureHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".cache/models"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".cache", "models"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeUnitFile(t, home, `{"units":[
@@ -348,7 +355,7 @@ func TestUnitFileUnitIsOptInThroughWith(t *testing.T) {
 // Reversibility is absolute, and writing a unit down does not lower the gate.
 func TestUnitFileLossyUnitStillNeedsAllowLossy(t *testing.T) {
 	home := fixtureHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".cache/notes"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".cache", "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeUnitFile(t, home, `{"units":[
@@ -437,7 +444,7 @@ func TestModelsFlagIsDefined(t *testing.T) {
 // with their considered tier and flag, not the scanner's guess.
 func TestDiscoverDoesNotSecondGuessTheModelCache(t *testing.T) {
 	home := fixtureHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".cache/huggingface"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".cache", "huggingface"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -524,7 +531,7 @@ func TestBrokenConfigStopsTheRun(t *testing.T) {
 
 func TestConfigTierLowersTheCeiling(t *testing.T) {
 	home := fixtureHome(t)
-	if err := os.MkdirAll(filepath.Join(home, ".cache/ms-playwright"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(discover.CacheRoot(home), "ms-playwright"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeConfig(t, home, `{"tier":0}`)
@@ -573,7 +580,7 @@ func TestBelowLetsTheRunProceedWhenSpaceIsShort(t *testing.T) {
 // The guard has to hold with --apply, which is the only way it is ever used.
 func TestBelowDeletesNothingWhenNotMet(t *testing.T) {
 	home := fixtureHome(t)
-	blob := filepath.Join(home, ".cache/pip/blob")
+	blob := filepath.Join(discover.CacheRoot(home), "pip", "blob")
 
 	out, code := run(t, home, "clean", "--below", "1K", "--apply", "--yes")
 
@@ -609,8 +616,9 @@ func TestHistoryShowsWhatWasRemoved(t *testing.T) {
 		t.Fatalf("history failed: %v\n%s", err, out)
 	}
 
-	if !strings.Contains(string(out), ".cache/pip") {
-		t.Errorf("history does not say what was removed:\n%s", out)
+	want := filepath.Join(discover.CacheRoot(home), "pip")
+	if !strings.Contains(string(out), want) {
+		t.Errorf("history does not name %s:\n%s", want, out)
 	}
 }
 
@@ -749,5 +757,19 @@ func TestStatusSaysSoWhenThereIsNothingToReport(t *testing.T) {
 	}
 	if strings.TrimSpace(out) == "" {
 		t.Error("status printed nothing at all")
+	}
+}
+
+// On macOS none of the Linux system units register, so --system used to select
+// nothing and say nothing, which reads as "there was nothing to reclaim"
+// rather than "this platform is not covered".
+func TestSystemSaysWhenItHasNothingForThisPlatform(t *testing.T) {
+	out, code := run(t, fixtureHome(t), "clean", "--system", "--only", "system-nothing-matches")
+
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Error("printed nothing at all")
 	}
 }
