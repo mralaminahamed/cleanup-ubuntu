@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-251-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-264-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -83,6 +83,7 @@ reclaim clean               # measure and report; deletes nothing
 reclaim clean --apply       # reclaim, after confirming
 reclaim status              # filesystems, free space, pressure
 reclaim analyze --min 1G    # largest directories; advisory, never deleted
+reclaim analyze --installers  # stale downloads; advisory, never deleted
 reclaim history             # what past runs actually removed
 reclaim completion bash     # shell completion script
 ```
@@ -99,6 +100,29 @@ reclaim clean --tier 2      # never escalate past tier 2
 `--auto` finds the most pressured filesystem and lets how full it is decide how
 hard to try. A comfortable disk gets only the free tiers; a critical one earns a
 cold reload.
+
+### Stale installers
+
+```bash
+reclaim analyze --installers --older 90
+```
+
+Reports `.deb`, `.rpm`, `.AppImage`, `.iso` and friends in `~/Downloads` that
+have sat there for months. This one **only ever reports**. Everything else the
+tool touches lives in a cache directory, where the containing directory is
+itself the argument that the contents are disposable; `~/Downloads` is the
+opposite, and a download there may be the only copy of something.
+
+Archives are not counted. A `.zip` is a container, not an intent, and on a real
+`~/Downloads` the largest ones turned out to be a book collection and a Figma UI
+kit.
+
+Where it can be proven rather than guessed — a `.deb` whose package is already
+installed at exactly that version — the report says so:
+
+```
+  • ~/Downloads/coreutils.deb   20.2KiB  200d  coreutils 9.4-3ubuntu6.3 is already installed
+```
 
 ### Scheduling
 
@@ -308,6 +332,7 @@ internal/runner/     execution, with a protected-path backstop
 internal/discover/   caches with no hardcoded rule
 internal/unitfile/   unit definitions loaded from files
 internal/config/     defaults read from a file
+internal/installers/ stale downloads, reported and never removed
 internal/report/     text and JSON output
 internal/oplog/      append-only record of what was deleted
 internal/fsutil/     sizes, mounts and pressure
@@ -329,7 +354,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 251 tests across 15 packages
+go test ./...          # 264 tests across 16 packages
 go test ./... -race
 go vet ./...
 ```

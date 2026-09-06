@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var bin string
@@ -629,5 +630,109 @@ func TestHistoryRecordsNothingForADryRun(t *testing.T) {
 
 	if !strings.Contains(string(out), "no recorded runs") {
 		t.Errorf("a dry run left a record:\n%s", out)
+	}
+}
+
+func TestAnalyzeInstallersReportsStaleDownloads(t *testing.T) {
+	home := fixtureHome(t)
+	dl := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(dl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dl, "ubuntu.iso")
+	if err := os.WriteFile(old, make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-200 * 24 * time.Hour)
+	if err := os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := run(t, home, "analyze", "--installers")
+
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "ubuntu.iso") {
+		t.Errorf("stale installer not reported:\n%s", out)
+	}
+}
+
+// The whole point of this command: ~/Downloads holds user files, so it reports
+// and never removes. Nothing here may grow a deletion path by accident.
+func TestAnalyzeInstallersDeletesNothing(t *testing.T) {
+	home := fixtureHome(t)
+	dl := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(dl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dl, "old.deb")
+	if err := os.WriteFile(old, make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-200 * 24 * time.Hour)
+	if err := os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	// --apply is not a flag this command has; passing it must not find one.
+	run(t, home, "analyze", "--installers")
+	run(t, home, "analyze", "--installers", "--older", "1")
+
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("analyze removed a download: %v", err)
+	}
+}
+
+func TestAnalyzeWithoutInstallersIsUnchanged(t *testing.T) {
+	home := fixtureHome(t)
+	dl := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(dl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dl, "old.deb"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := run(t, home, "analyze")
+
+	if strings.Contains(out, "old.deb") {
+		t.Errorf("installers reported without being asked for:\n%s", out)
+	}
+}
+
+// analyze produces a report, and a report nobody can pipe is half a feature.
+// clean has had --json since the start.
+func TestAnalyzeSupportsJSON(t *testing.T) {
+	home := fixtureHome(t)
+	dl := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(dl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dl, "ubuntu.iso")
+	if err := os.WriteFile(old, make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-200 * 24 * time.Hour)
+	if err := os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := run(t, home, "analyze", "--installers", "--json")
+	if code != 0 {
+		t.Fatalf("exited %d:\n%s", code, out)
+	}
+
+	var got struct {
+		Installers []struct {
+			Path    string `json:"path"`
+			AgeDays int    `json:"age_days"`
+		} `json:"installers"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, out)
+	}
+	if len(got.Installers) != 1 || got.Installers[0].AgeDays < 190 {
+		t.Fatalf("installers = %+v", got.Installers)
 	}
 }

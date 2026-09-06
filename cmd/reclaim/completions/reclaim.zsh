@@ -61,7 +61,11 @@ _reclaim() {
 
     case "${words[2]}" in
         clean)      _arguments $clean_flags ;;
-        analyze)    _arguments '--min[only report dirs at least this large]:size' '-n[how many entries]:count' ;;
+        analyze)    _arguments '--min[only report dirs at least this large]:size' \
+                                '--installers[also report stale downloads]' \
+                                '--older[days before an installer is stale]:days' \
+                                '--json[machine-readable output]' \
+                                '-n[how many entries]:count' ;;
         history)    _arguments '-n[how many entries]:count' ;;
         completion) _values 'shell' bash zsh fish ;;
     esac
