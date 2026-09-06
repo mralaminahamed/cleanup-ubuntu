@@ -6,6 +6,7 @@
 package catalog
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -106,6 +107,28 @@ func Build(env Env) *unit.Registry {
 	b.paths("claude-vm", "Claude VM bundles", unit.TierIrreplaceable, false, "--claude-vm",
 		".config/Claude/vm_bundles")
 
+	// Flatpak. Each app pins the runtime version it was built against, so as
+	// apps update the old runtimes are left behind unreferenced at 1-2GiB
+	// apiece. Nothing removes them by default.
+	//
+	// Both units are opt-in. The uninstall changes what is installed rather
+	// than only what is cached, and the app caches are opt-in for a duller
+	// reason: lock detection cannot yet tell which flatpak apps are running, so
+	// the flag is standing in for the check that would otherwise park a live
+	// app's cache.
+	if env.Has != nil && env.Has("flatpak") {
+		b.r.Add(&unit.Unit{ID: "flatpak-unused", Tier: unit.TierPkgCache, Reversible: true,
+			Label: "unused flatpak runtimes", Kind: unit.KindCmd, Flag: "--flatpak",
+			Command: "flatpak uninstall --unused -y", MountHint: "/var/lib/flatpak"})
+
+		// ~/.var/app/<id>/cache is the sandbox's own ~/.cache. Its siblings are
+		// not: "data" holds the application's real state and "config" its
+		// settings, so the app directory is named a level at a time rather than
+		// globbed.
+		b.appCaches("flatpak-app-caches", "flatpak app caches", "--flatpak",
+			filepath.Join(b.env.Home, ".var", "app"))
+	}
+
 	// Docker is usually the single biggest reclaim on a developer machine, but
 	// pruning volumes can drop database data, so it stays irreversible.
 	if env.Has != nil && env.Has("docker") {
@@ -127,6 +150,34 @@ func (b *builder) cmd(id, label, bin, command string) {
 	}
 	b.r.Add(&unit.Unit{ID: id, Tier: unit.TierNative, Reversible: true, Label: label,
 		Kind: unit.KindCmd, Command: command, MountHint: b.env.Home})
+}
+
+// appCaches registers one unit covering the "cache" directory of every app
+// under root that has one.
+//
+// One unit rather than one per app: these are all the same kind of thing and a
+// per-app breakdown would bury the rest of the report under however many
+// flatpaks happen to be installed.
+func (b *builder) appCaches(id, label, flag, root string) {
+	apps, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	var present []string
+	for _, a := range apps {
+		if !a.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, a.Name(), "cache")
+		if exists(p) {
+			present = append(present, p)
+		}
+	}
+	if len(present) == 0 {
+		return
+	}
+	b.r.Add(&unit.Unit{ID: id, Tier: unit.TierPkgCache, Reversible: true, Label: label,
+		Kind: unit.KindPaths, Paths: present, Flag: flag, MountHint: b.env.Home})
 }
 
 // paths registers a path unit, keeping only the paths that exist here.
