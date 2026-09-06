@@ -9,13 +9,13 @@
     },
 
     {
-      "id": "flatpak-unused",
-      "label": "unused flatpak runtimes",
+      "id": "conda-pkgs",
+      "label": "conda package cache",
       "tier": 1,
       "reversible": true,
-      "command": "flatpak uninstall --unused -y",
-      "requires": "flatpak",
-      "mount_hint": "/var/lib/flatpak"
+      "command": "conda clean --all --yes",
+      "requires": "conda",
+      "mount_hint": "/home"
     },
 
     {

@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-157-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-163-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -109,6 +109,7 @@ Units in these groups are **never** touched unless you name them:
 | `--browsers` | Chrome, Brave and Firefox HTTP caches |
 | `--playwright` | Playwright browser binaries |
 | `--system` | apt cache, bounded journal vacuum, superseded snap revisions |
+| `--flatpak` | unused runtimes, and each app's sandboxed cache |
 | `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
 | `--docker`, `--docker-volumes` | Docker prune — volumes may hold databases |
 | `--sites-idle N` | dependency trees of projects idle for N days |
@@ -140,12 +141,12 @@ declared in `~/.config/reclaim/units.json`, or dropped into
       "paths": [".cache/ccache"]
     },
     {
-      "id": "flatpak-unused",
-      "label": "unused flatpak runtimes",
+      "id": "conda-pkgs",
+      "label": "conda package cache",
       "tier": 1,
       "reversible": true,
-      "command": "flatpak uninstall --unused -y",
-      "requires": "flatpak"
+      "command": "conda clean --all --yes",
+      "requires": "conda"
     }
   ]
 }
@@ -231,7 +232,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 157 tests across 14 packages
+go test ./...          # 163 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```

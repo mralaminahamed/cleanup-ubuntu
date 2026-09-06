@@ -391,3 +391,17 @@ func TestUnitFileCannotRedefineAShippedUnit(t *testing.T) {
 		t.Errorf("a file redefined a shipped unit:\n%s", out)
 	}
 }
+
+// Every opt-in group in the catalog needs a flag of its own. Reaching it only
+// through --with would make it a second-class group for no reason the user can
+// see.
+func TestFlatpakFlagIsDefined(t *testing.T) {
+	out, code := run(t, fixtureHome(t), "clean", "--flatpak")
+
+	if code != 0 {
+		t.Fatalf("--flatpak exited %d:\n%s", code, out)
+	}
+	if strings.Contains(out, "not defined") {
+		t.Errorf("--flatpak is not a defined flag:\n%s", out)
+	}
+}
