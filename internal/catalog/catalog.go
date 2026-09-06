@@ -79,6 +79,30 @@ func Build(env Env) *unit.Registry {
 	b.paths("act-cache", "act (gh actions)", unit.TierPkgCache, true, "", ".cache/act")
 	b.paths("giget", "giget templates", unit.TierPkgCache, true, "", ".cache/giget")
 
+	// Local model storage, which is what changed most about what fills a disk
+	// since the rest of this catalog was written. These reach tens to hundreds
+	// of gigabytes.
+	//
+	// Reversible: every file re-downloads. Tier 3 because that download is
+	// hours long and often metered, which is the whole distinction the ladder
+	// exists to draw -- "comes back" and "comes back for free" are different
+	// claims.
+	//
+	// Pruning is the exception and is deliberately separate. It discards only
+	// revisions nothing references and downloads that never finished, so it is
+	// cheap, needs no permission, and leaves working models alone. Same reason
+	// the catalog prefers "npm cache clean" to deleting the directory: the tool
+	// knows which parts are dead and we do not.
+	b.cmdAt("hf-prune", "huggingface prune", "hf", "hf cache prune", unit.TierPkgCache)
+	b.paths("hf-cache", "huggingface models", unit.TierColdReload, true, "--models",
+		".cache/huggingface")
+	b.paths("torch-hub", "torch checkpoints", unit.TierColdReload, true, "--models",
+		".cache/torch")
+	b.paths("whisper-models", "whisper weights", unit.TierColdReload, true, "--models",
+		".cache/whisper")
+	b.paths("lmstudio-models", "LM Studio models", unit.TierColdReload, true, "--models",
+		".lmstudio/models")
+
 	// Tier 2: bigger regenerable artefacts.
 	b.paths("playwright", "playwright browsers", unit.TierArtifact, true, "--playwright",
 		".cache/ms-playwright")
@@ -145,10 +169,16 @@ func Build(env Env) *unit.Registry {
 
 // cmd registers a command unit when its tool is installed.
 func (b *builder) cmd(id, label, bin, command string) {
+	b.cmdAt(id, label, bin, command, unit.TierNative)
+}
+
+// cmdAt registers a native command at a tier other than free. Most of these
+// cost nothing; a few cost a re-download of whatever they discard.
+func (b *builder) cmdAt(id, label, bin, command string, tier unit.Tier) {
 	if b.env.Has == nil || !b.env.Has(bin) {
 		return
 	}
-	b.r.Add(&unit.Unit{ID: id, Tier: unit.TierNative, Reversible: true, Label: label,
+	b.r.Add(&unit.Unit{ID: id, Tier: tier, Reversible: true, Label: label,
 		Kind: unit.KindCmd, Command: command, MountHint: b.env.Home})
 }
 
