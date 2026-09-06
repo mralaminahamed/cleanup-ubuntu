@@ -82,7 +82,7 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 // honoured, or honoured under a name nothing defines.
 var optInFlags = []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
 	"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
-	"claude-history", "heavy", "flatpak", "kernels"}
+	"claude-history", "heavy", "flatpak", "kernels", "models"}
 
 func cmdClean(args []string) int {
 	fs := flag.NewFlagSet("clean", flag.ContinueOnError)

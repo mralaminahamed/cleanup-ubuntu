@@ -419,3 +419,32 @@ func TestKernelsFlagIsSeparateFromSystem(t *testing.T) {
 		t.Errorf("--kernels is not a defined flag:\n%s", out)
 	}
 }
+
+func TestModelsFlagIsDefined(t *testing.T) {
+	out, code := run(t, fixtureHome(t), "clean", "--models")
+
+	if code != 0 {
+		t.Fatalf("--models exited %d:\n%s", code, out)
+	}
+	if strings.Contains(out, "not defined") {
+		t.Errorf("--models is not a defined flag:\n%s", out)
+	}
+}
+
+// The bug that started this: a discovered cache carries an assumed tier. Now
+// that the catalog names the model caches, discovery must leave them alone --
+// with their considered tier and flag, not the scanner's guess.
+func TestDiscoverDoesNotSecondGuessTheModelCache(t *testing.T) {
+	home := fixtureHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".cache/huggingface"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := run(t, home, "clean", "--discover", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "xdg-huggingface" || id == "hf-cache" {
+			t.Fatalf("model cache planned by a default run as %q:\n%s", id, out)
+		}
+	}
+}

@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-207-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-213-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -111,6 +111,7 @@ Units in these groups are **never** touched unless you name them:
 | `--system` | apt cache, bounded journal vacuum, old snap revisions, crash dumps |
 | `--flatpak` | unused runtimes, and each app's sandboxed cache |
 | `--kernels` | superseded kernel packages (never the running one) |
+| `--models` | huggingface, torch, whisper and LM Studio model stores |
 | `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
 | `--docker`, `--docker-volumes` | Docker prune — volumes may hold databases |
 | `--sites-idle N` | dependency trees of projects idle for N days |
@@ -118,6 +119,12 @@ Units in these groups are **never** touched unless you name them:
 
 Irreversible units additionally require `--allow-lossy`. Set `RECLAIM_NO_OPLOG=1`
 to disable the operations log.
+
+Model stores are tier 3 rather than tier 1 because "comes back" and "comes back
+for free" are different claims: every file re-downloads, over hours, often
+metered. Pruning is separate and unflagged — `hf cache prune` discards only
+revisions nothing references and downloads that never finished, so it costs
+nothing and leaves working models alone.
 
 Crash artifacts under `/var/crash` and `/var/lib/systemd/coredump` are only
 taken once they are **older than seven days**. That bound is what makes them
@@ -246,7 +253,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 207 tests across 14 packages
+go test ./...          # 213 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```
