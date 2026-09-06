@@ -589,3 +589,45 @@ func TestBadBelowSizeExitsNonZero(t *testing.T) {
 		t.Fatal("a bad --below size was accepted")
 	}
 }
+
+// The log answers "what did that run actually take from me". Before this it
+// could only answer "which unit ran", which is not the same question after a
+// --discover run.
+func TestHistoryShowsWhatWasRemoved(t *testing.T) {
+	home := fixtureHome(t)
+	cmd := exec.Command(bin, "clean", "--only", "pip-cache", "--apply", "--yes")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clean failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "history")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("history failed: %v\n%s", err, out)
+	}
+
+	if !strings.Contains(string(out), ".cache/pip") {
+		t.Errorf("history does not say what was removed:\n%s", out)
+	}
+}
+
+// A dry run deletes nothing and is not written to the log at all, so it must
+// not leave a record naming paths that are still there.
+func TestHistoryRecordsNothingForADryRun(t *testing.T) {
+	home := fixtureHome(t)
+	cmd := exec.Command(bin, "clean", "--only", "pip-cache")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clean failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "history")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, _ := cmd.CombinedOutput()
+
+	if !strings.Contains(string(out), "no recorded runs") {
+		t.Errorf("a dry run left a record:\n%s", out)
+	}
+}

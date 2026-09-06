@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-242-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-251-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -271,6 +271,10 @@ A longer example is in [docs/units.example.json](docs/units.example.json).
 - **Locks.** Caches of running applications are skipped, named, and attributed to
   a pid. `reclaim` excludes its own process, so its command line cannot lock it
   out of its own work.
+- **The log says what went.** `reclaim history` records the paths each unit
+  removed, not just which unit ran — after a `--discover` run the unit list was
+  not knowable in advance. Long lists are trimmed with a true count, so a
+  record never understates what happened. Deletion is final: there is no undo.
 - **Probing never deletes.** Everything reachable from the measuring phase is
   read-only, asserted by a test that walks the tree before and after.
 - **Protected names.** `Local Storage`, `IndexedDB`, `Cookies`, `Login Data` and
@@ -325,7 +329,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 242 tests across 15 packages
+go test ./...          # 251 tests across 15 packages
 go test ./... -race
 go vet ./...
 ```

@@ -20,6 +20,11 @@ type Result struct {
 	Unit  *unit.Unit
 	Freed int64
 	Err   error
+	// Removed names what was actually deleted, for the operations log.
+	// Empty for a dry run, which deletes nothing, and for a command unit,
+	// which deletes its own data by its own rules -- naming that unit's paths
+	// would be inventing a record of something this code did not do.
+	Removed []string
 }
 
 // Runner executes units in order.
@@ -72,8 +77,8 @@ func (r *Runner) ensureRoot() error {
 func (r *Runner) Run(units []*unit.Unit) []Result {
 	var out []Result
 	for _, u := range units {
-		freed, err := r.runOne(u)
-		out = append(out, Result{Unit: u, Freed: freed, Err: err})
+		freed, removed, err := r.runOne(u)
+		out = append(out, Result{Unit: u, Freed: freed, Err: err, Removed: removed})
 
 		if r.TargetBytes > 0 && r.targetMet() {
 			r.StoppedEarly = true
@@ -99,16 +104,16 @@ func (r *Runner) targetMet() bool {
 	return n >= r.TargetBytes
 }
 
-func (r *Runner) runOne(u *unit.Unit) (int64, error) {
+func (r *Runner) runOne(u *unit.Unit) (int64, []string, error) {
 	if u.Kind == unit.KindCmd {
 		if !r.Apply {
-			return u.Bytes, nil
+			return u.Bytes, nil, nil
 		}
 		// Ask for elevation before running, so a missing password is reported
 		// as exactly that rather than as an unexplained non-zero exit.
 		if u.NeedsRoot {
 			if err := r.ensureRoot(); err != nil {
-				return 0, fmt.Errorf("needs root: %w", err)
+				return 0, nil, fmt.Errorf("needs root: %w", err)
 			}
 		}
 		run := r.Exec
@@ -116,12 +121,13 @@ func (r *Runner) runOne(u *unit.Unit) (int64, error) {
 			run = shellRun
 		}
 		if err := run(u.Command); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
-		return u.Bytes, nil
+		return u.Bytes, nil, nil
 	}
 
 	var freed int64
+	var removed []string
 	for _, p := range u.Paths {
 		if p == "" {
 			continue
@@ -130,11 +136,11 @@ func (r *Runner) runOne(u *unit.Unit) (int64, error) {
 		// unit aimed at a protected directory must be refused even though the
 		// entries inside it would pass the depth rule on their own.
 		if err := checkSafe(p); err != nil {
-			return freed, err
+			return freed, removed, err
 		}
 		for _, t := range u.Targets(p) {
 			if err := checkSafe(t); err != nil {
-				return freed, err
+				return freed, removed, err
 			}
 			n, _ := fsutil.PathBytes(t)
 			if !r.Apply {
@@ -142,12 +148,13 @@ func (r *Runner) runOne(u *unit.Unit) (int64, error) {
 				continue
 			}
 			if err := os.RemoveAll(t); err != nil {
-				return freed, err
+				return freed, removed, err
 			}
 			freed += n
+			removed = append(removed, t)
 		}
 	}
-	return freed, nil
+	return freed, removed, nil
 }
 
 // protected are paths that no unit may ever delete, whatever it claims. This is
