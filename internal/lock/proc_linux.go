@@ -1,3 +1,5 @@
+//go:build linux
+
 package lock
 
 import (
@@ -7,7 +9,11 @@ import (
 	"strconv"
 )
 
-// Running reads the process table.
+// Running reads the process table from /proc.
+//
+// Reading /proc directly rather than shelling out to ps: this runs on every
+// clean, and forking a process to learn which processes exist is a poor trade
+// when the kernel already exposes them as files.
 //
 // Our own process is excluded on purpose: this tool's command line contains the
 // very names the rules match on ("--gradle", a path with "chrome" in it), so
