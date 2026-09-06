@@ -126,18 +126,26 @@ func (r *Runner) runOne(u *unit.Unit) (int64, error) {
 		if p == "" {
 			continue
 		}
+		// The containing path is checked as well as each target. An age-bounded
+		// unit aimed at a protected directory must be refused even though the
+		// entries inside it would pass the depth rule on their own.
 		if err := checkSafe(p); err != nil {
 			return freed, err
 		}
-		n, _ := fsutil.PathBytes(p)
-		if !r.Apply {
+		for _, t := range u.Targets(p) {
+			if err := checkSafe(t); err != nil {
+				return freed, err
+			}
+			n, _ := fsutil.PathBytes(t)
+			if !r.Apply {
+				freed += n
+				continue
+			}
+			if err := os.RemoveAll(t); err != nil {
+				return freed, err
+			}
 			freed += n
-			continue
 		}
-		if err := os.RemoveAll(p); err != nil {
-			return freed, err
-		}
-		freed += n
 	}
 	return freed, nil
 }

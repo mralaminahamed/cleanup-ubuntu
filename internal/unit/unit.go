@@ -7,6 +7,12 @@
 // variable at runtime. One struct removes that whole class of bug.
 package unit
 
+import (
+	"time"
+
+	"github.com/mralaminahamed/reclaim/internal/fsutil"
+)
+
 // Tier orders units from "costs nothing" to "may be irreplaceable". The planner
 // walks tiers in ascending order and refuses to cross a ceiling, so the numbers
 // are load-bearing: they are the escalation ladder, not labels.
@@ -60,6 +66,11 @@ type Unit struct {
 	// the files that kernel put on disk. Reporting nothing for those is a worse
 	// answer than the one available.
 	SizePaths []string
+	// MinAge, when set, makes Paths directories of records rather than one
+	// disposable thing: only entries last modified longer ago than this are
+	// measured or removed, and the directory itself is never touched. A crash
+	// dump written this morning is the one being investigated.
+	MinAge time.Duration
 	// Detail is printed under the unit in the report. A byte count is enough
 	// to consent to deleting a cache and is not enough to consent to removing
 	// named packages.
@@ -142,4 +153,21 @@ func (r *Registry) Claimed(path string) bool {
 		}
 	}
 	return false
+}
+
+// Targets expands one of a unit's paths into the things that would actually be
+// removed.
+//
+// Without MinAge that is the path itself. With it, the path is a directory of
+// records and the targets are the entries old enough to qualify -- never the
+// directory, which is what receives new ones.
+//
+// Probing and running both go through this so they cannot disagree about what
+// the unit covers. A measurement that counted a directory the run would not
+// take is a promise of space that never arrives.
+func (u *Unit) Targets(path string) []string {
+	if u.MinAge <= 0 {
+		return []string{path}
+	}
+	return fsutil.EntriesOlderThan(path, u.MinAge)
 }
