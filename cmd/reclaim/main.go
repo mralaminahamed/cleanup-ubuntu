@@ -375,6 +375,13 @@ func cmdStatus(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if len(mounts) == 0 {
+		// Usually a container: the root filesystem is overlay, which is
+		// excluded as a pseudo filesystem. Silence here reads as a broken
+		// command rather than as an empty answer.
+		fmt.Println("no real filesystems found (overlay and pseudo filesystems are not reported)")
+		return 0
+	}
 	for _, m := range mounts {
 		fmt.Printf("  %-28s %8s free of %8s  %3d%%  %s\n",
 			m.Path, fsutil.Human(m.Avail), fsutil.Human(m.Total), m.UsedPct, m.Pressure())

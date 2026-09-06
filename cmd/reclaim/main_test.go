@@ -736,3 +736,18 @@ func TestAnalyzeSupportsJSON(t *testing.T) {
 		t.Fatalf("installers = %+v", got.Installers)
 	}
 }
+
+// Inside a container the root filesystem is usually overlay, which is excluded
+// as a pseudo filesystem, so there is genuinely nothing to report. Printing
+// nothing at all and exiting 0 is indistinguishable from being broken, and CI
+// now runs this in five containers.
+func TestStatusSaysSoWhenThereIsNothingToReport(t *testing.T) {
+	out, code := run(t, t.TempDir(), "status")
+
+	if code != 0 {
+		t.Fatalf("status exited %d:\n%s", code, out)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Error("status printed nothing at all")
+	}
+}
