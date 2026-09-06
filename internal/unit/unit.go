@@ -54,6 +54,16 @@ type Unit struct {
 	Paths []string
 	// Command is used when Kind is KindCmd.
 	Command string
+	// SizePaths are measured but never deleted. A command's yield is usually
+	// unknowable before it runs, but not always: what "apt-get clean" frees is
+	// what sits in the archive directory, and what purging a kernel frees is
+	// the files that kernel put on disk. Reporting nothing for those is a worse
+	// answer than the one available.
+	SizePaths []string
+	// Detail is printed under the unit in the report. A byte count is enough
+	// to consent to deleting a cache and is not enough to consent to removing
+	// named packages.
+	Detail []string
 
 	// Flag is the opt-in flag that lets this unit exceed the tier ceiling.
 	Flag string

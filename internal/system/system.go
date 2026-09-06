@@ -7,6 +7,7 @@ package system
 
 import (
 	"os/exec"
+	"strings"
 
 	"github.com/mralaminahamed/reclaim/internal/unit"
 )
@@ -17,14 +18,24 @@ type Env struct {
 	Has func(bin string) bool
 	// JournalKeep bounds the journal vacuum. Empty means keep 200M.
 	JournalKeep string
+	// KernelPackages lists the installed kernel packages, and RunningKernel
+	// names the release in use. Both are injected so the selection can be
+	// tested against kernel sets this machine does not have -- and the
+	// selection is the part that must not be got wrong.
+	KernelPackages func() []string
+	RunningKernel  func() string
 }
 
 // DefaultEnv returns an Env for this machine.
 func DefaultEnv() Env {
-	return Env{Has: func(bin string) bool {
-		_, err := exec.LookPath(bin)
-		return err == nil
-	}}
+	return Env{
+		Has: func(bin string) bool {
+			_, err := exec.LookPath(bin)
+			return err == nil
+		},
+		KernelPackages: installedKernels,
+		RunningKernel:  runningKernel,
+	}
 }
 
 // Add registers the system units that apply here.
@@ -51,6 +62,22 @@ func Add(r *unit.Registry, env Env) {
 		// Bounded on purpose: an unbounded vacuum would drop the entire journal
 		// and with it the logs needed to explain a recent failure.
 		add("system-journal", "journal vacuum", "sudo journalctl --vacuum-size="+keep, unit.TierPkgCache)
+	}
+	// Kernels get a unit of their own rather than a blanket autoremove. apt
+	// decides for itself what is orphaned, and that set is not something this
+	// tool can preview honestly; a kernel removal is exactly where a preview
+	// matters most.
+	if env.Has("apt-get") && env.KernelPackages != nil && env.RunningKernel != nil {
+		if rm := removable(env.KernelPackages(), env.RunningKernel()); len(rm.Packages) > 0 {
+			r.Add(&unit.Unit{
+				ID: "system-kernels", Tier: unit.TierPkgCache, Reversible: true,
+				Label: "superseded kernels", Kind: unit.KindCmd, Flag: "--kernels",
+				MountHint: "/boot", NeedsRoot: true,
+				Command:   "sudo apt-get -y purge " + strings.Join(rm.Packages, " "),
+				Detail:    rm.Packages,
+				SizePaths: rm.Paths,
+			})
+		}
 	}
 	if env.Has("snap") {
 		// "|| exit 1" matters: a while loop is the last stage of this pipeline
