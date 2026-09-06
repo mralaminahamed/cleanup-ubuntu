@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-191-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-207-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -108,7 +108,7 @@ Units in these groups are **never** touched unless you name them:
 | `--jetbrains` | JetBrains IDE caches |
 | `--browsers` | Chrome, Brave and Firefox HTTP caches |
 | `--playwright` | Playwright browser binaries |
-| `--system` | apt cache, bounded journal vacuum, superseded snap revisions |
+| `--system` | apt cache, bounded journal vacuum, old snap revisions, crash dumps |
 | `--flatpak` | unused runtimes, and each app's sandboxed cache |
 | `--kernels` | superseded kernel packages (never the running one) |
 | `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
@@ -118,6 +118,13 @@ Units in these groups are **never** touched unless you name them:
 
 Irreversible units additionally require `--allow-lossy`. Set `RECLAIM_NO_OPLOG=1`
 to disable the operations log.
+
+Crash artifacts under `/var/crash` and `/var/lib/systemd/coredump` are only
+taken once they are **older than seven days**. That bound is what makes them
+safe to treat as regenerable: a dump written this morning belongs to a crash
+someone may be reading right now, and taking it would destroy the only copy of
+that failure. One from last month is a record the system itself is configured
+to expire.
 
 `--kernels` is deliberately not part of `--system`, and never runs
 `apt autoremove`: apt decides for itself what is orphaned, and that set cannot
@@ -239,7 +246,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 191 tests across 14 packages
+go test ./...          # 207 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```

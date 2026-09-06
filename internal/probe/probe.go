@@ -57,11 +57,15 @@ func measure(u *unit.Unit) {
 		// PathBytes reports 0 for a path that is not there, and a unit may
 		// name files that only some of its targets own.
 		for _, p := range u.SizePaths {
-			n, err := fsutil.PathBytes(p)
-			if err != nil {
-				continue
+			// Through Targets, so an age bound narrows the measurement the
+			// same way it narrows what the command will take.
+			for _, t := range u.Targets(p) {
+				n, err := fsutil.PathBytes(t)
+				if err != nil {
+					continue
+				}
+				u.Bytes += n
 			}
-			u.Bytes += n
 		}
 		u.Mount = fsutil.MountOf(mountHint(u))
 		return
@@ -72,14 +76,16 @@ func measure(u *unit.Unit) {
 		if p == "" {
 			continue
 		}
-		n, err := fsutil.PathBytes(p)
-		if err != nil {
-			continue
-		}
 		if u.Mount == "" {
 			u.Mount = fsutil.MountOf(p)
 		}
-		total += n
+		for _, t := range u.Targets(p) {
+			n, err := fsutil.PathBytes(t)
+			if err != nil {
+				continue
+			}
+			total += n
+		}
 	}
 	if u.Mount == "" {
 		u.Mount = fsutil.MountOf(mountHint(u))
