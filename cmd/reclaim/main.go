@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,6 +76,13 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
+// optInFlags are the boolean opt-in groups. Registration and forcing both read
+// this one list, so a new group cannot be half-wired: defined but never
+// honoured, or honoured under a name nothing defines.
+var optInFlags = []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
+	"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
+	"claude-history", "heavy"}
+
 func cmdClean(args []string) int {
 	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
 	var (
@@ -96,9 +104,7 @@ func cmdClean(args []string) int {
 	fs.Var(&only, "only", "restrict the run to these unit ids or globs (repeatable)")
 	fs.Var(&exclude, "exclude", "drop these unit ids or globs (repeatable)")
 	fs.Var(&flags, "with", "opt-in flag such as --gradle, passed as --with gradle (repeatable)")
-	for _, name := range []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
-		"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
-		"claude-history"} {
+	for _, name := range optInFlags {
 		fs.Bool(name, false, "opt in to the "+name+" units")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -108,10 +114,9 @@ func cmdClean(args []string) int {
 	home, _ := os.UserHomeDir()
 	forced := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "gradle", "maven", "jetbrains", "browsers", "playwright",
-			"docker", "docker-volumes", "claude-vm", "system", "claude-jobs",
-			"claude-plugins", "claude-history", "sites-idle":
+		// sites-idle is not a bool, but giving it a value is the same act of
+		// opting in, so it forces its units the same way.
+		if f.Name == "sites-idle" || slices.Contains(optInFlags, f.Name) {
 			forced["--"+f.Name] = true
 		}
 	})
@@ -140,6 +145,11 @@ func cmdClean(args []string) int {
 		})
 	}
 	probe.All(reg, *workers)
+	// A discovered unit was claimed for where it sits, so its tier is an
+	// assumption about cost that nobody checked. Now that the size is known,
+	// revisit it: a 2GiB cache is as regenerable as a 2MiB one and nothing
+	// like as cheap.
+	discover.PromoteHeavy(reg, discover.HeavyThreshold)
 	lock.Apply(reg, lock.DefaultRules(home), lock.Running())
 
 	opts := plan.Options{
@@ -191,6 +201,9 @@ func cmdClean(args []string) int {
 	}
 
 	selected, withheld := plan.Select(reg, opts)
+	// What Select passed over for want of a flag. Not running these is the
+	// point of a flag; not mentioning them would just hide the space.
+	optIn := plan.OptIn(reg, opts)
 	var locked []*unit.Unit
 	for _, u := range reg.All() {
 		if u.LockedBy != "" {
@@ -233,7 +246,7 @@ func cmdClean(args []string) int {
 	}
 
 	s := report.Summary{
-		Selected: ran, Failed: failed, Locked: locked, Withheld: withheld,
+		Selected: ran, Failed: failed, Locked: locked, Withheld: withheld, OptIn: optIn,
 		TotalBytes: total, DryRun: !*apply, StoppedEarly: r.StoppedEarly,
 	}
 	if *jsonOut {

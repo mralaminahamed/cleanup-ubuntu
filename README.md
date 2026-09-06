@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-99-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-131-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -112,6 +112,7 @@ Units in these groups are **never** touched unless you name them:
 | `--claude-jobs`, `--claude-plugins` | Claude Code scratch and plugin cache |
 | `--docker`, `--docker-volumes` | Docker prune — volumes may hold databases |
 | `--sites-idle N` | dependency trees of projects idle for N days |
+| `--heavy` | discovered caches over 1GiB (see below) |
 
 Irreversible units additionally require `--allow-lossy`. Set `RECLAIM_NO_OPLOG=1`
 to disable the operations log.
@@ -174,10 +175,18 @@ Discovery uses two different rules on purpose. Everything directly under
 and needs no whitelist. A cache nested inside `~/.config` sits beside real
 application state, so there it is claimed by *name* against a strict list.
 
+Claiming by location is a sound argument that the contents are regenerable and
+no argument at all about what regenerating them *costs*. A model cache and a
+font cache are both disposable; only one of them is cheap. So once sizes are
+known, any discovered unit over 1GiB is re-rated: it moves to the cold-reload
+tier and becomes opt-in behind `--heavy`. It is still reported — with its size
+and the flag that would claim it — because hiding the space would be no better
+than deleting it unasked.
+
 ## Development
 
 ```bash
-go test ./...          # 99 tests across 13 packages
+go test ./...          # 131 tests across 13 packages
 go test ./... -race
 go vet ./...
 ```

@@ -171,3 +171,118 @@ func TestOnlyRestrictsThePlan(t *testing.T) {
 		}
 	}
 }
+
+// planned reports the unit ids a clean run would run.
+func planned(t *testing.T, out string) []string {
+	t.Helper()
+	var got struct {
+		Units []struct {
+			ID string `json:"id"`
+		} `json:"units"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, out)
+	}
+	ids := make([]string, 0, len(got.Units))
+	for _, u := range got.Units {
+		ids = append(ids, u.ID)
+	}
+	return ids
+}
+
+// hugeCache creates a directory under ~/.cache whose apparent size is 2GiB.
+// The file is sparse, so it costs no disk: the probe sums stat sizes, which is
+// exactly what the promotion pass reads.
+func hugeCache(t *testing.T, home, name string) {
+	t.Helper()
+	dir := filepath.Join(home, ".cache", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(dir, "blob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(2 << 30); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A discovered cache is claimed for its location, which says nothing about what
+// refilling it costs. A very large one must not be reachable by a default run:
+// deleting a model cache is reversible, but only in the sense that hours of
+// download will put it back.
+func TestDiscoverDoesNotPlanAHugeCacheByDefault(t *testing.T) {
+	home := fixtureHome(t)
+	hugeCache(t, home, "hugecache")
+
+	out, _ := run(t, home, "clean", "--discover", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "xdg-hugecache" {
+			t.Fatalf("a 2GiB discovered cache was planned by a default run:\n%s", out)
+		}
+	}
+}
+
+// Promotion raises the price, it does not forbid the purchase. Naming the
+// group must still reach it.
+func TestDiscoverPlansAHugeCacheWhenHeavyIsGiven(t *testing.T) {
+	home := fixtureHome(t)
+	hugeCache(t, home, "hugecache")
+
+	out, _ := run(t, home, "clean", "--discover", "--heavy", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "xdg-hugecache" {
+			return
+		}
+	}
+	t.Fatalf("--heavy did not reach the promoted unit:\n%s", out)
+}
+
+// Opt-in means opt-in. Raising the tier ceiling authorises a tier, never a
+// group, so it must not be a back door into the promoted unit.
+func TestRaisingTheTierAloneDoesNotReachAHugeCache(t *testing.T) {
+	home := fixtureHome(t)
+	hugeCache(t, home, "hugecache")
+
+	out, _ := run(t, home, "clean", "--discover", "--tier", "5", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "xdg-hugecache" {
+			t.Fatalf("--tier reached a unit that needs --heavy:\n%s", out)
+		}
+	}
+}
+
+// The ordinary case must not regress: discovery still buys what it always did.
+func TestDiscoverStillPlansSmallCachesByDefault(t *testing.T) {
+	home := fixtureHome(t)
+
+	out, _ := run(t, home, "clean", "--discover", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "xdg-randomtool" {
+			return
+		}
+	}
+	t.Fatalf("a small discovered cache was not planned:\n%s", out)
+}
+
+// Withholding the unit is only half the fix. Before this, a huge discovered
+// cache was deleted without being asked about; a version that instead says
+// nothing at all would hide the same space rather than reclaim it.
+func TestDiscoverOffersTheHugeCacheItHeldBack(t *testing.T) {
+	home := fixtureHome(t)
+	hugeCache(t, home, "hugecache")
+
+	out, _ := run(t, home, "clean", "--discover")
+
+	for _, want := range []string{".cache/hugecache", "2.0GiB", "--heavy"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report does not mention %q:\n%s", want, out)
+		}
+	}
+}
