@@ -1,0 +1,12 @@
+Package: reclaim
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Al Amin Ahamed <n.mukto@codexpert.io>
+Homepage: https://github.com/mralaminahamed/reclaim
+Description: Reclaim disk space without losing anything you cannot get back
+ reclaim measures and removes regenerable data - package caches, build
+ artifacts, browser caches - ordered by how expensive each one is to get back.
+ It refuses to cross a reversibility ceiling, skips caches belonging to
+ applications that are currently running, and deletes nothing without --apply.
