@@ -18,6 +18,7 @@ import (
 	"github.com/mralaminahamed/reclaim/internal/config"
 	"github.com/mralaminahamed/reclaim/internal/discover"
 	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/installers"
 	"github.com/mralaminahamed/reclaim/internal/lock"
 	"github.com/mralaminahamed/reclaim/internal/oplog"
 	"github.com/mralaminahamed/reclaim/internal/plan"
@@ -384,6 +385,9 @@ func cmdStatus(args []string) int {
 func cmdAnalyze(args []string) int {
 	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	min := fs.String("min", "500M", "only report directories at least this large")
+	stale := fs.Bool("installers", false, "also report stale downloaded installers")
+	older := fs.Int("older", 90, "how many days old an installer must be to be stale")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -394,7 +398,21 @@ func cmdAnalyze(args []string) int {
 	}
 	home, _ := os.UserHomeDir()
 	heavy := discover.Heavyweights([]string{home}, n)
-	report.Text(os.Stdout, report.Summary{Heavy: heavy, DryRun: true})
+	sum := report.Summary{Heavy: heavy, DryRun: true}
+	if *stale {
+		// ~/Downloads holds user files, not cache. This reports and never
+		// removes, which is why it lives in analyze rather than as a unit.
+		sum.Installers = installers.Find(installers.DefaultEnv(),
+			filepath.Join(home, "Downloads"),
+			time.Duration(*older)*24*time.Hour)
+	}
+	if *asJSON {
+		if err := report.JSON(os.Stdout, sum); err != nil {
+			return 1
+		}
+		return 0
+	}
+	report.Text(os.Stdout, sum)
 	return 0
 }
 

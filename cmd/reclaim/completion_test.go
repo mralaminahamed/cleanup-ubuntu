@@ -74,15 +74,23 @@ func TestUnitsIsNotAdvertised(t *testing.T) {
 // The scripts are embedded, so a flag added to main.go stops being completable
 // without anything failing. This is the thing that notices.
 func TestEveryCleanFlagAppearsInEveryCompletionScript(t *testing.T) {
-	help, _ := run(t, t.TempDir(), "clean", "--help")
 	flagLine := regexp.MustCompile(`(?m)^\s+-([a-z0-9-]+)`)
 
 	var flags []string
-	for _, m := range flagLine.FindAllStringSubmatch(help, -1) {
-		flags = append(flags, m[1])
+	// Every subcommand that has flags, not only clean: analyze grew three and
+	// nothing would have noticed.
+	for _, sub := range []string{"clean", "analyze"} {
+		help, _ := run(t, t.TempDir(), sub, "--help")
+		for _, m := range flagLine.FindAllStringSubmatch(help, -1) {
+			// Short flags are spelled differently again in each shell and are
+			// not worth a third rule.
+			if len(m[1]) > 1 {
+				flags = append(flags, m[1])
+			}
+		}
 	}
 	if len(flags) < 10 {
-		t.Fatalf("only found %d flags in --help, parsing is wrong:\n%s", len(flags), help)
+		t.Fatalf("only found %d flags across --help output, parsing is wrong: %v", len(flags), flags)
 	}
 
 	// Each shell spells a long option its own way. fish declares "-l apply",

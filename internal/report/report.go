@@ -8,6 +8,7 @@ import (
 
 	"github.com/mralaminahamed/reclaim/internal/discover"
 	"github.com/mralaminahamed/reclaim/internal/fsutil"
+	"github.com/mralaminahamed/reclaim/internal/installers"
 	"github.com/mralaminahamed/reclaim/internal/unit"
 )
 
@@ -26,8 +27,11 @@ type Summary struct {
 	Withheld []*unit.Unit
 	// OptIn holds units that were not attempted only because their flag was
 	// not given. They cost nothing to report and are the user's to claim.
-	OptIn        []*unit.Unit
-	Heavy        []discover.Heavy
+	OptIn []*unit.Unit
+	Heavy []discover.Heavy
+	// Installers are stale downloads. Advisory only: nothing here is ever
+	// selected, planned or deleted.
+	Installers   []installers.Installer
 	TotalBytes   int64
 	DryRun       bool
 	StoppedEarly bool
@@ -69,6 +73,14 @@ func JSON(w io.Writer, s Summary) error {
 		heavy = append(heavy, map[string]any{"path": h.Path, "bytes": h.Bytes})
 	}
 	out["heavyweights"] = heavy
+
+	inst := make([]map[string]any, 0, len(s.Installers))
+	for _, i := range s.Installers {
+		inst = append(inst, map[string]any{"path": i.Path, "bytes": i.Bytes,
+			"age_days": int(i.Age.Hours() / 24), "redundant": i.Redundant,
+			"reason": i.Reason})
+	}
+	out["installers"] = inst
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -148,6 +160,18 @@ func Text(w io.Writer, s Summary) {
 		fmt.Fprintln(w, "\n== Large directories (advisory, never deleted) ==")
 		for _, h := range s.Heavy {
 			fmt.Fprintf(w, "  • %-38s %10s\n", h.Path, fsutil.Human(h.Bytes))
+		}
+	}
+
+	if len(s.Installers) > 0 {
+		fmt.Fprintln(w, "\n== Stale installers (advisory, never deleted) ==")
+		for _, i := range s.Installers {
+			line := fmt.Sprintf("  • %-46s %10s  %dd", i.Path, fsutil.Human(i.Bytes),
+				int(i.Age.Hours()/24))
+			if i.Redundant {
+				line += "  " + i.Reason
+			}
+			fmt.Fprintln(w, line)
 		}
 	}
 
