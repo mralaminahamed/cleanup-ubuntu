@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-218-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-224-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -61,6 +61,17 @@ go build -o reclaim ./cmd/reclaim
 There are no third-party dependencies. For a tool that deletes files as root, an
 empty `require` block is a feature rather than an accident.
 
+### Shell completion
+
+```bash
+reclaim completion bash > /etc/bash_completion.d/reclaim
+reclaim completion zsh  > "${fpath[1]}/_reclaim"
+reclaim completion fish > ~/.config/fish/completions/reclaim.fish
+```
+
+Completing `--only` and `--exclude` asks the binary for unit ids rather than
+carrying a list, since which units exist depends on what is installed.
+
 ## Usage
 
 <div align="center">
@@ -73,6 +84,7 @@ reclaim clean --apply       # reclaim, after confirming
 reclaim status              # filesystems, free space, pressure
 reclaim analyze --min 1G    # largest directories; advisory, never deleted
 reclaim history             # what past runs actually removed
+reclaim completion bash     # shell completion script
 ```
 
 ### Targets
@@ -261,7 +273,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 218 tests across 14 packages
+go test ./...          # 224 tests across 14 packages
 go test ./... -race
 go vet ./...
 ```

@@ -43,6 +43,7 @@ COMMANDS
   analyze    list the largest directories, deleting nothing
   history    show what past runs deleted
   version    print the version
+  completion print a shell completion script
 
 Run "reclaim <command> --help" for a command's flags.
 `
@@ -65,6 +66,10 @@ func main() {
 		os.Exit(cmdAnalyze(os.Args[2:]))
 	case "history":
 		os.Exit(cmdHistory(os.Args[2:]))
+	case "completion":
+		os.Exit(cmdCompletion(os.Args[2:]))
+	case "__units":
+		os.Exit(cmdUnits())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
 		os.Exit(2)
