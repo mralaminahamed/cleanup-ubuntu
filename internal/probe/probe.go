@@ -52,9 +52,17 @@ func All(r *unit.Registry, workers int) {
 // measure fills in Bytes and Mount for a single unit.
 func measure(u *unit.Unit) {
 	if u.Kind == unit.KindCmd {
-		// A command's yield is unknown until it runs; it is reported as it
-		// happens rather than predicted here.
-		u.Bytes = 0
+		// A command's yield is unknown until it runs, unless the unit named
+		// the files it is going to free. Missing ones contribute nothing:
+		// PathBytes reports 0 for a path that is not there, and a unit may
+		// name files that only some of its targets own.
+		for _, p := range u.SizePaths {
+			n, err := fsutil.PathBytes(p)
+			if err != nil {
+				continue
+			}
+			u.Bytes += n
+		}
 		u.Mount = fsutil.MountOf(mountHint(u))
 		return
 	}

@@ -405,3 +405,17 @@ func TestFlatpakFlagIsDefined(t *testing.T) {
 		t.Errorf("--flatpak is not a defined flag:\n%s", out)
 	}
 }
+
+// Kernels are not part of --system. That flag is documented as the apt cache,
+// a bounded journal vacuum and old snap revisions, and quietly growing it to
+// include package removal would change what an existing command does.
+func TestKernelsFlagIsSeparateFromSystem(t *testing.T) {
+	out, code := run(t, fixtureHome(t), "clean", "--kernels")
+
+	if code != 0 {
+		t.Fatalf("--kernels exited %d:\n%s", code, out)
+	}
+	if strings.Contains(out, "not defined") {
+		t.Errorf("--kernels is not a defined flag:\n%s", out)
+	}
+}

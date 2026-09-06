@@ -34,14 +34,15 @@ type Summary struct {
 }
 
 type jsonUnit struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Tier     int    `json:"tier"`
-	Bytes    int64  `json:"bytes"`
-	Mount    string `json:"mount,omitempty"`
-	Flag     string `json:"flag,omitempty"`
-	LockedBy string `json:"locked_by,omitempty"`
-	PID      int    `json:"pid,omitempty"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Tier     int      `json:"tier"`
+	Bytes    int64    `json:"bytes"`
+	Mount    string   `json:"mount,omitempty"`
+	Flag     string   `json:"flag,omitempty"`
+	LockedBy string   `json:"locked_by,omitempty"`
+	PID      int      `json:"pid,omitempty"`
+	Detail   []string `json:"detail,omitempty"`
 }
 
 // JSON writes a machine-readable summary.
@@ -77,7 +78,7 @@ func JSON(w io.Writer, s Summary) error {
 func toJSON(us []*unit.Unit) []jsonUnit {
 	out := make([]jsonUnit, 0, len(us))
 	for _, u := range us {
-		out = append(out, jsonUnit{u.ID, u.Label, int(u.Tier), u.Bytes, u.Mount, u.Flag, u.LockedBy, u.PID})
+		out = append(out, jsonUnit{u.ID, u.Label, int(u.Tier), u.Bytes, u.Mount, u.Flag, u.LockedBy, u.PID, u.Detail})
 	}
 	return out
 }
@@ -92,6 +93,11 @@ func Text(w io.Writer, s Summary) {
 		fmt.Fprintln(w, "\n== Reclaimable ==")
 		for _, u := range s.Selected {
 			fmt.Fprintf(w, "  • %-38s %10s\n", u.Label, fsutil.Human(u.Bytes))
+			// A size is enough to consent to deleting a cache, and not enough
+			// to consent to removing named packages.
+			for _, d := range u.Detail {
+				fmt.Fprintf(w, "      %s\n", d)
+			}
 		}
 	}
 

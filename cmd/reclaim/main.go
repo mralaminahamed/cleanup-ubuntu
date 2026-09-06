@@ -82,7 +82,7 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 // honoured, or honoured under a name nothing defines.
 var optInFlags = []string{"gradle", "maven", "jetbrains", "browsers", "playwright",
 	"docker", "docker-volumes", "claude-vm", "system", "claude-jobs", "claude-plugins",
-	"claude-history", "heavy", "flatpak"}
+	"claude-history", "heavy", "flatpak", "kernels"}
 
 func cmdClean(args []string) int {
 	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
@@ -135,7 +135,11 @@ func cmdClean(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if forced["--system"] {
+	// --kernels lives in the system package but is not part of --system: that
+	// flag is documented as the apt cache, a bounded journal vacuum and old
+	// snap revisions, and growing it to include package removal would change
+	// what an existing command does.
+	if forced["--system"] || forced["--kernels"] {
 		system.Add(reg, system.DefaultEnv())
 	}
 	if *sitesIdle > 0 {
@@ -267,13 +271,31 @@ func cmdClean(args []string) int {
 	return 0
 }
 
-func confirm(sel []*unit.Unit) bool {
+// confirmMessage is the last thing shown before anything is deleted, so it
+// repeats whatever detail the report carried. Approving "1 location (700MiB)"
+// is not the same as approving the removal of four named packages.
+func confirmMessage(sel []*unit.Unit) string {
 	var total int64
+	var b strings.Builder
 	for _, u := range sel {
 		total += u.Bytes
 	}
-	fmt.Printf("About to delete %d cache locations (%s). Continue? [y/N] ",
-		len(sel), fsutil.Human(total))
+	for _, u := range sel {
+		for _, d := range u.Detail {
+			fmt.Fprintf(&b, "  %s: %s\n", u.Label, d)
+		}
+	}
+	noun := "units"
+	if len(sel) == 1 {
+		noun = "unit"
+	}
+	fmt.Fprintf(&b, "About to run %d %s (%s). Continue? [y/N] ",
+		len(sel), noun, fsutil.Human(total))
+	return b.String()
+}
+
+func confirm(sel []*unit.Unit) bool {
+	fmt.Print(confirmMessage(sel))
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	return line == "y" || line == "yes"
