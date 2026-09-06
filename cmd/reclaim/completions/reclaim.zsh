@@ -25,6 +25,7 @@ _reclaim() {
         '--yes[do not prompt]'
         '--free[clean until SIZE is free]:size'
         '--auto[pick a target from disk pressure]'
+        '--below[do nothing unless free space is under SIZE]:size'
         '--tier[highest tier to run]:tier'
         '--allow-lossy[permit units that destroy information]'
         '--discover[claim caches with no hardcoded rule]'

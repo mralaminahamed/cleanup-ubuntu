@@ -20,6 +20,7 @@ complete -c reclaim -n '__fish_seen_subcommand_from clean' -l apply -d 'actually
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l yes -d 'do not prompt'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l free -r -d 'clean until SIZE is free'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l auto -d 'target from disk pressure'
+complete -c reclaim -n '__fish_seen_subcommand_from clean' -l below -r -d 'act only under SIZE free'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l tier -r -d 'highest tier to run'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l allow-lossy -d 'permit lossy units'
 complete -c reclaim -n '__fish_seen_subcommand_from clean' -l discover -d 'claim unlisted caches'
