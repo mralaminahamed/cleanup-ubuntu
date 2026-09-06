@@ -9,7 +9,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-FCC624.svg?logo=linux&logoColor=black)](#status)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-4C1.svg)](go.mod)
-[![Tests](https://img.shields.io/badge/tests-224-4C1.svg)](#development)
+[![Tests](https://img.shields.io/badge/tests-238-4C1.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
@@ -164,6 +164,29 @@ you get a single password prompt rather than one per unit — and if elevation i
 declined the system units are reported under **Failed** with the reason, never
 counted as reclaimed.
 
+### Defaults
+
+`~/.config/reclaim/config.json` fills in flags that were not given:
+
+```json
+{
+  "workers": 12,
+  "tier": 3,
+  "exclude": ["go-*", "cargo-*"],
+  "sites_root": "~/Projects"
+}
+```
+
+One rule holds the whole file together: **a config may narrow a run and may
+never widen one.** So `apply`, `yes`, `allow_lossy`, `discover` and the opt-in
+group names are refused, by name and with the reason, rather than accepted
+quietly. A flag is typed at the moment of use and read back by whoever is about
+to press enter; a file is not read back by anyone, and the person it would
+surprise is the one who wrote it months ago and forgot. The worst a stale
+exclusion can do is leave space unreclaimed, which the next report points out.
+
+A file that exists and does not parse stops the run.
+
 ### Custom units
 
 The catalog covers what this tool ships with an opinion about. Anything else —
@@ -252,6 +275,7 @@ internal/plan/       tier ceiling and selection
 internal/runner/     execution, with a protected-path backstop
 internal/discover/   caches with no hardcoded rule
 internal/unitfile/   unit definitions loaded from files
+internal/config/     defaults read from a file
 internal/report/     text and JSON output
 internal/oplog/      append-only record of what was deleted
 internal/fsutil/     sizes, mounts and pressure
@@ -273,7 +297,7 @@ than deleting it unasked.
 ## Development
 
 ```bash
-go test ./...          # 224 tests across 14 packages
+go test ./...          # 238 tests across 15 packages
 go test ./... -race
 go vet ./...
 ```

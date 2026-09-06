@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mralaminahamed/reclaim/internal/catalog"
+	"github.com/mralaminahamed/reclaim/internal/config"
 	"github.com/mralaminahamed/reclaim/internal/discover"
 	"github.com/mralaminahamed/reclaim/internal/fsutil"
 	"github.com/mralaminahamed/reclaim/internal/lock"
@@ -118,6 +119,36 @@ func cmdClean(args []string) int {
 	}
 
 	home, _ := os.UserHomeDir()
+
+	// Config fills in only the flags that were not given. A file can narrow a
+	// run and can never widen one, so precedence never has to arbitrate
+	// anything dangerous: whatever the file says, the command line wins.
+	cfg, err := config.Load(config.DefaultPath(home))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	if cfg.Workers != nil && !given["workers"] {
+		*workers = *cfg.Workers
+	}
+	if cfg.Tier != nil && !given["tier"] {
+		*tier = *cfg.Tier
+	}
+	if cfg.JSON != nil && !given["json"] {
+		*jsonOut = *cfg.JSON
+	}
+	if cfg.SitesRoot != "" && !given["sites-root"] {
+		*sitesRoot = cfg.SitesRoot
+	}
+	if len(cfg.Only) > 0 && !given["only"] {
+		only = cfg.Only
+	}
+	if len(cfg.Exclude) > 0 && !given["exclude"] {
+		exclude = cfg.Exclude
+	}
+
 	forced := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) {
 		// sites-idle is not a bool, but giving it a value is the same act of

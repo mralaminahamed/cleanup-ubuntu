@@ -448,3 +448,91 @@ func TestDiscoverDoesNotSecondGuessTheModelCache(t *testing.T) {
 		}
 	}
 }
+
+func writeConfig(t *testing.T, home, body string) {
+	t.Helper()
+	dir := filepath.Join(home, ".config", "reclaim")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigExclusionAppliesWithoutTheFlag(t *testing.T) {
+	home := fixtureHome(t)
+	writeConfig(t, home, `{"exclude":["pip-*"]}`)
+
+	out, _ := run(t, home, "clean", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "pip-cache" {
+			t.Fatalf("config exclusion ignored:\n%s", out)
+		}
+	}
+}
+
+// A flag is typed at the moment of use. Whatever the file says, what is on the
+// command line is what the person meant this time.
+func TestFlagBeatsConfig(t *testing.T) {
+	home := fixtureHome(t)
+	writeConfig(t, home, `{"only":["npm-cacache"]}`)
+
+	out, _ := run(t, home, "clean", "--only", "pip-cache", "--json")
+
+	ids := planned(t, out)
+	if len(ids) == 0 {
+		t.Fatalf("nothing planned:\n%s", out)
+	}
+	for _, id := range ids {
+		if id != "pip-cache" {
+			t.Fatalf("config won over the flag: planned %q\n%s", id, out)
+		}
+	}
+}
+
+// The rule the file rests on, end to end: a config cannot authorise deletion.
+func TestConfigCannotTurnOnApply(t *testing.T) {
+	home := fixtureHome(t)
+	writeConfig(t, home, `{"apply":true}`)
+
+	out, code := run(t, home, "clean")
+
+	if code == 0 {
+		t.Fatalf("a config that authorises deletion was accepted:\n%s", out)
+	}
+	if !strings.Contains(out, "command line") {
+		t.Errorf("the error does not say where --apply belongs:\n%s", out)
+	}
+}
+
+func TestBrokenConfigStopsTheRun(t *testing.T) {
+	home := fixtureHome(t)
+	writeConfig(t, home, `{"workers":`)
+
+	out, code := run(t, home, "clean")
+
+	if code == 0 {
+		t.Fatalf("broken config did not stop the run:\n%s", out)
+	}
+	if !strings.Contains(out, "config.json") {
+		t.Errorf("the error does not name the file:\n%s", out)
+	}
+}
+
+func TestConfigTierLowersTheCeiling(t *testing.T) {
+	home := fixtureHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".cache/ms-playwright"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, home, `{"tier":0}`)
+
+	out, _ := run(t, home, "clean", "--json")
+
+	for _, id := range planned(t, out) {
+		if id == "pip-cache" {
+			t.Fatalf("a tier 1 unit ran under a tier 0 ceiling:\n%s", out)
+		}
+	}
+}
