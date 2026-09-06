@@ -20,10 +20,13 @@ type Failure struct {
 
 // Summary is everything one run wants to tell the user.
 type Summary struct {
-	Selected     []*unit.Unit
-	Failed       []Failure
-	Locked       []*unit.Unit
-	Withheld     []*unit.Unit
+	Selected []*unit.Unit
+	Failed   []Failure
+	Locked   []*unit.Unit
+	Withheld []*unit.Unit
+	// OptIn holds units that were not attempted only because their flag was
+	// not given. They cost nothing to report and are the user's to claim.
+	OptIn        []*unit.Unit
 	Heavy        []discover.Heavy
 	TotalBytes   int64
 	DryRun       bool
@@ -51,6 +54,7 @@ func JSON(w io.Writer, s Summary) error {
 		"units":             toJSON(s.Selected),
 		"locked":            toJSON(s.Locked),
 		"withheld":          toJSON(s.Withheld),
+		"opt_in":            toJSON(s.OptIn),
 	}
 	failed := make([]map[string]any, 0, len(s.Failed))
 	for _, f := range s.Failed {
@@ -117,6 +121,20 @@ func Text(w io.Writer, s Summary) {
 				line += "  include with: --allow-lossy"
 			}
 			fmt.Fprintln(w, line)
+		}
+	}
+
+	if len(s.OptIn) > 0 {
+		fmt.Fprintln(w, "\n== Available with an opt-in flag ==")
+		for _, u := range s.OptIn {
+			// An irreversible unit is gated twice. Naming only its own flag
+			// would send the user to a command that still does nothing.
+			how := u.Flag
+			if !u.Reversible {
+				how += " --allow-lossy"
+			}
+			fmt.Fprintf(w, "  • %-38s %10s  include with: %s\n",
+				u.Label, fsutil.Human(u.Bytes), how)
 		}
 	}
 

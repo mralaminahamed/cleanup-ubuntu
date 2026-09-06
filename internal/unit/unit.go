@@ -64,6 +64,11 @@ type Unit struct {
 	// an unexplained non-zero exit.
 	NeedsRoot bool
 
+	// Discovered marks a unit the scanners claimed by shape rather than one
+	// the catalog named deliberately. Its tier is an assumption, not a
+	// judgement, so it is the only tier the promotion pass is allowed to move.
+	Discovered bool
+
 	// Filled in by the probe phase.
 	Bytes int64
 	Mount string
