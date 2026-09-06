@@ -304,7 +304,7 @@ func cmdClean(args []string) int {
 	for _, res := range results {
 		if *apply {
 			entry := oplog.Entry{At: time.Now(), UnitID: res.Unit.ID, Label: res.Unit.Label,
-				Freed: res.Freed, Applied: true}
+				Freed: res.Freed, Applied: true, Paths: res.Removed}
 			if res.Err != nil {
 				entry.Err = res.Err.Error()
 			}
@@ -417,6 +417,14 @@ func cmdHistory(args []string) int {
 	for _, e := range entries {
 		fmt.Printf("  %s  %-28s %10s\n",
 			e.At.Format("2006-01-02 15:04"), e.UnitID, fsutil.Human(e.Freed))
+		for _, p := range e.Paths {
+			fmt.Printf("      %s\n", p)
+		}
+		// The list is trimmed to keep a line per unit readable; say so rather
+		// than let the entry look complete.
+		if more := e.PathCount - len(e.Paths); more > 0 {
+			fmt.Printf("      ... and %d more\n", more)
+		}
 	}
 	return 0
 }

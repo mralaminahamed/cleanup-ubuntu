@@ -21,7 +21,19 @@ type Entry struct {
 	Freed   int64     `json:"freed_bytes"`
 	Applied bool      `json:"applied"`
 	Err     string    `json:"error,omitempty"`
+	// Paths names what was removed, trimmed to keep one line per unit
+	// readable, and PathCount is how many there really were. "What ran" is
+	// answerable from the unit id; "what was removed" is not, and after a
+	// --discover run the unit list was not knowable in advance.
+	Paths     []string `json:"paths,omitempty"`
+	PathCount int      `json:"path_count,omitempty"`
 }
+
+// maxLoggedPaths bounds the list stored per entry. A --discover run can touch
+// hundreds of directories, and an operations log is only useful while it is
+// still readable. The count is recorded separately and stays true, so a trimmed
+// entry never understates what happened.
+const maxLoggedPaths = 12
 
 // Log is an append-only operations log.
 type Log struct {
@@ -48,6 +60,15 @@ func (l *Log) Append(e Entry) error {
 		return err
 	}
 	defer f.Close()
+
+	// Counted before trimming, so the record says how many there were even
+	// when it cannot list them all.
+	if e.PathCount == 0 {
+		e.PathCount = len(e.Paths)
+	}
+	if len(e.Paths) > maxLoggedPaths {
+		e.Paths = e.Paths[:maxLoggedPaths]
+	}
 
 	line, err := json.Marshal(e)
 	if err != nil {
